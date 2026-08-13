@@ -1,0 +1,32 @@
+[project]
+name = "cocotero"
+version = "0.1.0"
+description = "CLI paper manager (Zotero clone): BibTeX + PDF stored as plain documents."
+readme = "README.md"
+authors = [
+    { name = "Nicolas Lauzon", email = "nicolas_lauzon@outlook.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.31",
+    "bibtexparser>=2.0.0b7",
+    "rich>=13.0",
+]
+
+[project.scripts]
+cocotero = "cocotero.cli:main"
+
+[tool.pytest.ini_options]
+# This machine has ROS (jazzy) on PYTHONPATH, whose pytest plugins fail to
+# import (missing yaml). Disabling them keeps `uv run pytest` working.
+addopts = "-p no:launch_testing -p no:launch_ros"
+testpaths = ["tests"]
+
+[build-system]
+requires = ["uv_build>=0.9.18,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

@@ -1,0 +1,18 @@
+#compdef cocotero
+
+_cocotero() {
+  local -a commands keys
+  commands=(add list open)
+  if (( CURRENT == 2 )); then
+    _describe 'command' commands
+    return
+  fi
+  case "$words[2]" in
+    open)
+      keys=(${(f)"$(print -l "${COCOTERO_LIB:-$HOME/cocotero/library}"/*(/:t) 2>/dev/null)"})
+      _describe 'key' keys
+      ;;
+  esac
+}
+
+_cocotero "$@"
