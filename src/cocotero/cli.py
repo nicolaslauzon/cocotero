@@ -1,6 +1,7 @@
 import argparse
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from rich.console import Console
@@ -18,6 +19,7 @@ from .store import (
     StoreError,
     get_paper,
     keywords,
+    link_pdf,
     list_categories,
     list_papers,
     resolve_paper_url,
@@ -262,6 +264,49 @@ def cmd_cluster(args: argparse.Namespace) -> None:
     )
 
 
+def _retry_missing_pdfs() -> None:
+    missing = [paper for paper in list_papers() if not paper["has_pdf"]]
+    if not missing:
+        console.print("All papers have a PDF.")
+        return
+    console.print(f"Retrying {len(missing)} paper(s) without a PDF…")
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {pool.submit(download_pdf, paper): paper for paper in missing}
+        for future in as_completed(futures):
+            paper = futures[future]
+            outcome = future.result()
+            if outcome["pdf"]:
+                console.print(f"[green]{paper['key']}[/green] — PDF via {outcome['source']}")
+            else:
+                console.print(f"[dim]{paper['key']} — not found[/dim]")
+
+
+def cmd_pdf(args: argparse.Namespace) -> None:
+    try:
+        if args.path:
+            stored = link_pdf(args.key, args.path)
+            console.print(f"[green]Linked[/green] [bold]{args.key}[/bold] → {stored}")
+            return
+        if args.key:
+            paper = get_paper(args.key)
+            if paper is None:
+                console.print(f"[red]No paper with key '{args.key}'.[/red]")
+                raise SystemExit(1)
+            if paper["has_pdf"]:
+                console.print(f"[yellow]{args.key}[/yellow] already has a PDF.")
+                return
+            outcome = download_pdf(paper, interactive=True)
+            if outcome["pdf"]:
+                console.print(f"[green]{args.key}[/green] — PDF via {outcome['source']}")
+            else:
+                console.print(f"[yellow]{args.key}[/yellow] — not found (paywalled).")
+            return
+        _retry_missing_pdfs()
+    except StoreError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1)
+
+
 def _open_paper_url(key: str) -> None:
     paper = get_paper(key)
     if paper is None:
@@ -335,6 +380,11 @@ def build_parser() -> argparse.ArgumentParser:
     cluster_parser.add_argument("category")
     cluster_parser.add_argument("text", nargs="*")
     cluster_parser.set_defaults(func=cmd_cluster)
+
+    pdf_parser = sub.add_parser("pdf", help="Retry PDF downloads, or link a local PDF file.")
+    pdf_parser.add_argument("key", nargs="?", help="Retry this paper (omit to retry all missing).")
+    pdf_parser.add_argument("path", nargs="?", help="Local PDF file to link to the given key.")
+    pdf_parser.set_defaults(func=cmd_pdf)
     return parser
 
 

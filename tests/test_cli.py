@@ -107,3 +107,44 @@ def test_cmd_cluster_tags_all_papers(tmp_path, monkeypatch):
     cli.cmd_cluster(argparse.Namespace(category="paper-1", text=[]))
     assert store.keywords("vaswani2017") == {"paper-1"}
     assert store.keywords("brossard2020") == {"paper-1"}
+
+
+def test_cmd_pdf_links_local_file(tmp_path, monkeypatch):
+    _isolated_library(tmp_path, monkeypatch)
+    store.store_paper("@article{x, author={Vaswani, Ashish}, year={2017}, title={T}, doi={10.1/x}}")
+    pdf = tmp_path / "manual.pdf"
+    pdf.write_bytes(b"%PDF-1.4 manual")
+    cli.cmd_pdf(argparse.Namespace(key="vaswani2017", path=str(pdf)))
+    assert (tmp_path / "vaswani2017" / "paper.pdf").is_file()
+    assert "file = {:paper.pdf:PDF}" in (tmp_path / "vaswani2017" / "entry.bib").read_text()
+
+
+def test_cmd_pdf_retry_one(monkeypatch, tmp_path):
+    _isolated_library(tmp_path, monkeypatch)
+    store.store_paper("@article{x, author={Vaswani, Ashish}, year={2017}, title={T}, doi={10.1/x}}")
+    calls = []
+
+    def fake_download(paper, interactive=False):
+        calls.append((paper["key"], interactive))
+        return {"source": "arxiv", "pdf": "/tmp/paper.pdf"}
+
+    monkeypatch.setattr(cli, "download_pdf", fake_download)
+    cli.cmd_pdf(argparse.Namespace(key="vaswani2017", path=None))
+    assert calls == [("vaswani2017", True)]
+
+
+def test_cmd_pdf_retry_all(monkeypatch, tmp_path):
+    _isolated_library(tmp_path, monkeypatch)
+    store.store_paper("@article{x, author={Vaswani, Ashish}, year={2017}, title={T}, doi={10.1/x}}")
+    store.store_paper(
+        "@article{y, author={Brossard, Martin}, year={2020}, title={U}, doi={10.2/y}}"
+    )
+    calls = []
+
+    def fake_download(paper, interactive=False):
+        calls.append(paper["key"])
+        return {"source": "arxiv", "pdf": "/tmp/paper.pdf"}
+
+    monkeypatch.setattr(cli, "download_pdf", fake_download)
+    cli.cmd_pdf(argparse.Namespace(key=None, path=None))
+    assert sorted(calls) == ["brossard2020", "vaswani2017"]
