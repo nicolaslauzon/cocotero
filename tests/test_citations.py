@@ -80,7 +80,9 @@ def test_fetch_bibtex(library, monkeypatch):
     def fake_get(url, headers=None, timeout=None):
         assert url == "https://doi.org/10.48550/arxiv.1706.03762"
         assert "application/x-bibtex" in headers["Accept"]
-        return FakeResponse(text="@article{Vaswani2017,\n  author = {Vaswani, Ashish}\n}")
+        return FakeResponse(
+            text="@article{Vaswani2017,\n  author = {Vaswani, Ashish}\n}"
+        )
 
     monkeypatch.setattr(citations.requests, "get", fake_get)
     assert "Vaswani" in citations.fetch_bibtex("10.48550/arxiv.1706.03762")

@@ -38,8 +38,14 @@ def test_fzf_select_missing_tool(monkeypatch):
 
 def test_open_in_browser_silences_stderr(monkeypatch):
     calls = []
-    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/xdg-open" if name == "xdg-open" else None)
-    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: calls.append((args, kwargs)))
+    monkeypatch.setattr(
+        shutil,
+        "which",
+        lambda name: "/usr/bin/xdg-open" if name == "xdg-open" else None,
+    )
+    monkeypatch.setattr(
+        subprocess, "Popen", lambda *args, **kwargs: calls.append((args, kwargs))
+    )
     open_in_browser("https://example.org/paper")
     args, kwargs = calls[0]
     assert args[0] == ["/usr/bin/xdg-open", "https://example.org/paper"]

@@ -82,10 +82,12 @@ Strict standards — code must be 100% self-documenting:
   `brossard2020`); the key in the pasted BibTeX is always rewritten to match.
 - Pasted BibTeX is sanitized of ANSI escape sequences (`\x1bE`, CSI, ...) before
   parsing — bibtexparser's lenient parser otherwise bakes them into field keys.
-- Same DOI already in library → hard error, no duplicate.
+- Same DOI (or same normalized title when no DOI) already in library → **skip**
+  with a message, never a hard error; batch adds keep going.
 - PDF priority order is IEEE → Semantic Scholar → Unpaywall → arXiv (stored in
-  config `pdf_priority`). Institutional access = EZproxy `proxy_prefix` + watch
-  `downloads_dir` (~/Downloads) for browser-downloaded PDFs.
+  config `pdf_priority`; IEEE has no direct fetcher — its OA copies come via
+  Semantic Scholar / Unpaywall). Institutional access = EZproxy `proxy_prefix` +
+  watch `downloads_dir` (~/Downloads) for browser-downloaded PDFs (single adds only).
 - When in doubt about where a feature belongs or which step it is, check PLAN.md
   and follow the current step's spec exactly.
 

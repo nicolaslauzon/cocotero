@@ -1,8 +1,8 @@
+import os
 import tempfile
 from pathlib import Path
 
 import pytest
-import requests
 
 from cocotero import download, store
 from cocotero.config import load_config
@@ -15,7 +15,9 @@ def library(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _stored_paper(library, doi="10.48550/arxiv.1706.03762", title="Attention Is All You Need", url=""):
+def _stored_paper(
+    library, doi="10.48550/arxiv.1706.03762", title="Attention Is All You Need", url=""
+):
     bib = (
         "@article{x, author={Vaswani, Ashish}, year={2017}, "
         f"title={{{title}}}, doi={{{doi}}}, url={{{url}}}}}"
@@ -25,10 +27,11 @@ def _stored_paper(library, doi="10.48550/arxiv.1706.03762", title="Attention Is 
 
 
 def _pdf_path() -> Path:
-    handle = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
-    handle.write(b"%PDF-1.4 test")
-    handle.close()
-    return Path(handle.name)
+    fd, name = tempfile.mkstemp(suffix=".pdf")
+    os.close(fd)
+    path = Path(name)
+    path.write_bytes(b"%PDF-1.4 test")
+    return path
 
 
 class FakeResponse:
@@ -49,7 +52,9 @@ def test_download_pdf_via_semanticscholar(library, monkeypatch):
 
     def fake_get(url, params=None, headers=None, timeout=None, stream=False):
         urls.append(url)
-        return FakeResponse(payload={"data": [{"openAccessPdf": {"url": "https://example.org/oa.pdf"}}]})
+        return FakeResponse(
+            payload={"data": [{"openAccessPdf": {"url": "https://example.org/oa.pdf"}}]}
+        )
 
     monkeypatch.setattr(download.requests, "get", fake_get)
     monkeypatch.setattr(download, "_fetch_pdf", lambda url: _pdf_path())
@@ -61,9 +66,13 @@ def test_download_pdf_via_semanticscholar(library, monkeypatch):
 
 
 def test_download_pdf_via_unpaywall(library, monkeypatch):
-    paper = _stored_paper(library, doi="10.1109/LRA.2020.3003256", title="Denoising IMU")
+    paper = _stored_paper(
+        library, doi="10.1109/LRA.2020.3003256", title="Denoising IMU"
+    )
     (library / "config.toml").write_text(
-        (library / "config.toml").read_text().replace('unpaywall_email = ""', 'unpaywall_email = "t@example.com"')
+        (library / "config.toml")
+        .read_text()
+        .replace('unpaywall_email = ""', 'unpaywall_email = "t@example.com"')
     )
 
     def fake_get(url, params=None, headers=None, timeout=None, stream=False):
@@ -71,7 +80,11 @@ def test_download_pdf_via_unpaywall(library, monkeypatch):
             return FakeResponse(payload={"data": []})
         assert url == "https://api.unpaywall.org/v2/10.1109/LRA.2020.3003256"
         assert params["email"] == "t@example.com"
-        return FakeResponse(payload={"best_oa_location": {"url_for_pdf": "https://example.org/paper.pdf"}})
+        return FakeResponse(
+            payload={
+                "best_oa_location": {"url_for_pdf": "https://example.org/paper.pdf"}
+            }
+        )
 
     monkeypatch.setattr(download.requests, "get", fake_get)
     monkeypatch.setattr(download, "_fetch_pdf", lambda url: _pdf_path())
@@ -97,7 +110,9 @@ def test_download_pdf_via_arxiv_url(library, monkeypatch):
 
 
 def test_download_pdf_all_sources_fail(library, monkeypatch):
-    paper = _stored_paper(library, doi="10.1109/LRA.2020.3003256", title="Denoising IMU")
+    paper = _stored_paper(
+        library, doi="10.1109/LRA.2020.3003256", title="Denoising IMU"
+    )
 
     def fake_get(url, params=None, headers=None, timeout=None, stream=False):
         return FakeResponse(payload={"data": []})
@@ -145,7 +160,9 @@ def test_fetch_pdf_rejects_non_pdf_body(monkeypatch):
 
 
 def test_ezproxy_handoff_picks_new_download(library, monkeypatch):
-    paper = _stored_paper(library, doi="10.1109/LRA.2020.3003256", title="Denoising IMU")
+    paper = _stored_paper(
+        library, doi="10.1109/LRA.2020.3003256", title="Denoising IMU"
+    )
     downloads = library / "downloads"
     downloads.mkdir()
     (library / "config.toml").write_text(
@@ -175,7 +192,9 @@ def test_ezproxy_handoff_picks_new_download(library, monkeypatch):
 
 
 def test_download_pdf_interactive_handoff(library, monkeypatch):
-    paper = _stored_paper(library, doi="10.1109/LRA.2020.3003256", title="Denoising IMU")
+    paper = _stored_paper(
+        library, doi="10.1109/LRA.2020.3003256", title="Denoising IMU"
+    )
     downloads = library / "downloads"
     downloads.mkdir()
     (library / "config.toml").write_text(
@@ -186,8 +205,11 @@ def test_download_pdf_interactive_handoff(library, monkeypatch):
         'pdf_priority = ["semanticscholar"]\n'
     )
     monkeypatch.setattr(
-        download.requests, "get",
-        lambda url, params=None, headers=None, timeout=None, stream=False: FakeResponse(payload={"data": []}),
+        download.requests,
+        "get",
+        lambda url, params=None, headers=None, timeout=None, stream=False: FakeResponse(
+            payload={"data": []}
+        ),
     )
     monkeypatch.setattr(download, "open_in_browser", lambda url: None)
     state = {"calls": 0}

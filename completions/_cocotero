@@ -2,13 +2,13 @@
 
 _cocotero() {
   local -a commands keys
-  commands=(add list open)
+  commands=(add list open cat cats cluster pdf rm)
   if (( CURRENT == 2 )); then
     _describe 'command' commands
     return
   fi
   case "$words[2]" in
-    open)
+    open|cat|pdf|rm)
       keys=(${(f)"$(print -l "${COCOTERO_LIB:-$HOME/cocotero/library}"/*(/:t) 2>/dev/null)"})
       _describe 'key' keys
       ;;

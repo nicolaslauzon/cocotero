@@ -9,12 +9,18 @@ class MissingToolError(RuntimeError):
 
 def fzf_select(lines: list[str], preview_cmd: str | None = None) -> str | None:
     if shutil.which("fzf") is None:
-        raise MissingToolError("fzf is required but not installed (e.g. `apt install fzf`).")
+        raise MissingToolError(
+            "fzf is required but not installed (e.g. `apt install fzf`)."
+        )
     cmd = ["fzf", "--no-multi"]
     if preview_cmd:
         cmd += ["--preview", preview_cmd, "--preview-window", "right:60%"]
     proc = subprocess.run(
-        cmd, input="\n".join(lines) + "\n", text=True, stdout=subprocess.PIPE, check=False
+        cmd,
+        input="\n".join(lines) + "\n",
+        text=True,
+        stdout=subprocess.PIPE,
+        check=False,
     )
     if proc.returncode != 0:
         return None

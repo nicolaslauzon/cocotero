@@ -5,7 +5,9 @@ from cocotero import cli, store
 
 def test_get_bibtex_routes_positional_text(monkeypatch):
     monkeypatch.setattr(cli, "_route_paste", lambda text: f"routed:{text}")
-    args = argparse.Namespace(bib=None, title=None, doi=None, text=["VQF: Highly", "accurate IMU"])
+    args = argparse.Namespace(
+        bib=None, title=None, doi=None, text=["VQF: Highly", "accurate IMU"]
+    )
     assert cli._get_bibtex(args) == "routed:VQF: Highly accurate IMU"
 
 
@@ -32,14 +34,22 @@ def test_get_bibtex_prefers_explicit_flags(monkeypatch):
 
 def test_get_bibtex_bib_flag(monkeypatch):
     monkeypatch.setattr(cli, "_route_paste", lambda text: "should-not-run")
-    args = argparse.Namespace(bib="@article{x, title={T}}", title=None, doi=None, text=None)
+    args = argparse.Namespace(
+        bib="@article{x, title={T}}", title=None, doi=None, text=None
+    )
     assert cli._get_bibtex(args) == "@article{x, title={T}}"
 
 
 def test_extract_doi():
     assert cli._extract_doi("10.48550/arxiv.1706.03762") == "10.48550/arxiv.1706.03762"
-    assert cli._extract_doi("https://doi.org/10.1109/LRA.2020.3003256") == "10.1109/LRA.2020.3003256"
-    assert cli._extract_doi("see https://doi.org/10.1109/LRA.2020.3003256.") == "10.1109/LRA.2020.3003256"
+    assert (
+        cli._extract_doi("https://doi.org/10.1109/LRA.2020.3003256")
+        == "10.1109/LRA.2020.3003256"
+    )
+    assert (
+        cli._extract_doi("see https://doi.org/10.1109/LRA.2020.3003256.")
+        == "10.1109/LRA.2020.3003256"
+    )
     assert cli._extract_doi("Attention is all you need") is None
     assert cli._extract_doi("") is None
 
@@ -61,7 +71,10 @@ def test_route_paste_empty():
 
 def test_route_paste_doi(monkeypatch):
     monkeypatch.setattr(cli, "_lookup_by_doi", lambda doi: f"bibtex-{doi}")
-    assert cli._route_paste("10.48550/arxiv.1706.03762") == "bibtex-10.48550/arxiv.1706.03762"
+    assert (
+        cli._route_paste("10.48550/arxiv.1706.03762")
+        == "bibtex-10.48550/arxiv.1706.03762"
+    )
 
 
 def test_route_paste_arxiv(monkeypatch):
@@ -81,7 +94,9 @@ def _isolated_library(tmp_path, monkeypatch):
 
 def test_cmd_cat_toggle(tmp_path, monkeypatch):
     _isolated_library(tmp_path, monkeypatch)
-    store.store_paper("@article{x, author={Vaswani, Ashish}, year={2017}, title={T}, doi={10.1/x}}")
+    store.store_paper(
+        "@article{x, author={Vaswani, Ashish}, year={2017}, title={T}, doi={10.1/x}}"
+    )
     args = argparse.Namespace(key="vaswani2017", cat="imu")
     cli.cmd_cat(args)
     assert store.keywords("vaswani2017") == {"imu"}
@@ -91,7 +106,9 @@ def test_cmd_cat_toggle(tmp_path, monkeypatch):
 
 def test_cmd_cat_shows_tags(tmp_path, monkeypatch):
     _isolated_library(tmp_path, monkeypatch)
-    store.store_paper("@article{x, author={Vaswani, Ashish}, year={2017}, title={T}, doi={10.1/x}}")
+    store.store_paper(
+        "@article{x, author={Vaswani, Ashish}, year={2017}, title={T}, doi={10.1/x}}"
+    )
     store.set_keywords("vaswani2017", {"imu", "slam"})
     cli.cmd_cat(argparse.Namespace(key="vaswani2017", cat=None))
     assert store.keywords("vaswani2017") == {"imu", "slam"}
@@ -111,17 +128,24 @@ def test_cmd_cluster_tags_all_papers(tmp_path, monkeypatch):
 
 def test_cmd_pdf_links_local_file(tmp_path, monkeypatch):
     _isolated_library(tmp_path, monkeypatch)
-    store.store_paper("@article{x, author={Vaswani, Ashish}, year={2017}, title={T}, doi={10.1/x}}")
+    store.store_paper(
+        "@article{x, author={Vaswani, Ashish}, year={2017}, title={T}, doi={10.1/x}}"
+    )
     pdf = tmp_path / "manual.pdf"
     pdf.write_bytes(b"%PDF-1.4 manual")
     cli.cmd_pdf(argparse.Namespace(key="vaswani2017", path=str(pdf)))
     assert (tmp_path / "vaswani2017" / "paper.pdf").is_file()
-    assert "file = {:paper.pdf:PDF}" in (tmp_path / "vaswani2017" / "entry.bib").read_text()
+    assert (
+        "file = {:paper.pdf:PDF}"
+        in (tmp_path / "vaswani2017" / "entry.bib").read_text()
+    )
 
 
 def test_cmd_pdf_retry_one(monkeypatch, tmp_path):
     _isolated_library(tmp_path, monkeypatch)
-    store.store_paper("@article{x, author={Vaswani, Ashish}, year={2017}, title={T}, doi={10.1/x}}")
+    store.store_paper(
+        "@article{x, author={Vaswani, Ashish}, year={2017}, title={T}, doi={10.1/x}}"
+    )
     calls = []
 
     def fake_download(paper, interactive=False):
@@ -135,7 +159,9 @@ def test_cmd_pdf_retry_one(monkeypatch, tmp_path):
 
 def test_cmd_pdf_retry_all(monkeypatch, tmp_path):
     _isolated_library(tmp_path, monkeypatch)
-    store.store_paper("@article{x, author={Vaswani, Ashish}, year={2017}, title={T}, doi={10.1/x}}")
+    store.store_paper(
+        "@article{x, author={Vaswani, Ashish}, year={2017}, title={T}, doi={10.1/x}}"
+    )
     store.store_paper(
         "@article{y, author={Brossard, Martin}, year={2020}, title={U}, doi={10.2/y}}"
     )

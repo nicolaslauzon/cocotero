@@ -4,7 +4,11 @@ from pathlib import Path
 from typing import TypedDict
 
 HOME = Path.home()
-CONFIG_PATH = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "cocotero" / "config.toml"
+CONFIG_PATH = (
+    Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config"))
+    / "cocotero"
+    / "config.toml"
+)
 
 
 class Config(TypedDict):

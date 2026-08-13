@@ -187,9 +187,12 @@ def store_paper(bib_text: str, pdf_path: str | None = None) -> StoredPaper:
     if pdf_path and not Path(pdf_path).expanduser().is_file():
         raise StoreError(f"PDF not found: {Path(pdf_path).expanduser()}")
 
-    key = _unique_key(library, make_bibkey(
-        first_author_lastname(_value(entry, "author")), _value(entry, "year")
-    ))
+    key = _unique_key(
+        library,
+        make_bibkey(
+            first_author_lastname(_value(entry, "author")), _value(entry, "year")
+        ),
+    )
     folder = library / key
     folder.mkdir(parents=True, exist_ok=False)
 
@@ -224,7 +227,10 @@ def link_pdf(key: str, pdf_path: str) -> str:
 
 def store_papers(bib_text: str, pdf_path: str | None = None) -> list[StoredPaper]:
     entries = _entries(bib_text)
-    return [store_paper(write_string(Library([entry])), pdf_path=pdf_path) for entry in entries]
+    return [
+        store_paper(write_string(Library([entry])), pdf_path=pdf_path)
+        for entry in entries
+    ]
 
 
 def list_papers(category: str | None = None) -> list[Paper]:

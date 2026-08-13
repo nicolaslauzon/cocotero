@@ -18,13 +18,16 @@ BIB = """@article{vaswani2017attention,
   doi = {10.48550/arxiv.1706.03762}
 }"""
 
-BATCH = BIB + """
+BATCH = (
+    BIB
+    + """
 @article{brossard2020,
   author = {Brossard, Martin and Bonnabel, Silvere},
   title = {Denoising IMU},
   year = {2020},
   doi = {10.1109/LRA.2020.3003256}
 }"""
+)
 
 
 def test_slugify():
@@ -71,7 +74,7 @@ def test_store_paper_with_pdf(library):
 
 
 def test_store_paper_duplicate_doi(library):
-    first = store.store_paper(BIB)
+    store.store_paper(BIB)
     second = store.store_paper(BIB.replace("vaswani2017attention", "copy2017"))
     assert second["status"] == "skipped"
     assert second["existing_key"] == "vaswani2017"
@@ -92,7 +95,9 @@ def test_store_paper_duplicate_title_without_doi(library):
 
 def test_store_paper_same_title_different_doi_not_duplicate(library):
     first = store.store_paper(BIB)
-    second = store.store_paper(BIB.replace("10.48550/arxiv.1706.03762", "10.9999/different"))
+    second = store.store_paper(
+        BIB.replace("10.48550/arxiv.1706.03762", "10.9999/different")
+    )
     assert first["status"] == "added"
     assert second["status"] == "added"
 
@@ -120,7 +125,9 @@ def test_store_papers_bad_bibtex(library):
 
 def test_store_paper_collision_suffix(library):
     first = store.store_paper(BIB)
-    second = store.store_paper(BIB.replace("10.48550/arxiv.1706.03762", "10.9999/different"))
+    second = store.store_paper(
+        BIB.replace("10.48550/arxiv.1706.03762", "10.9999/different")
+    )
     assert second["key"] == f"{first['key']}-2"
 
 
@@ -134,7 +141,11 @@ def test_store_paper_rewrites_key(library):
     assert result["key"] == "vaswani2017"
     assert (library / "vaswani2017").is_dir()
     assert not (library / "Brossard2020").exists()
-    assert (library / "vaswani2017" / "entry.bib").read_text().startswith("@article{vaswani2017,")
+    assert (
+        (library / "vaswani2017" / "entry.bib")
+        .read_text()
+        .startswith("@article{vaswani2017,")
+    )
 
 
 def test_store_paper_sanitizes_escape_codes(library):
@@ -180,17 +191,27 @@ def test_search_index(library):
     store.store_paper(BIB)
     lines = store.search_index()
     assert len(lines) == 1
-    assert lines[0].startswith("vaswani2017\t2017 Vaswani, Ashish and Shazeer, Noam and Parmar, Niki — Attention is All You Need")
+    assert lines[0].startswith(
+        "vaswani2017\t2017 Vaswani, Ashish and Shazeer, Noam and Parmar, Niki — Attention is All You Need"
+    )
 
 
 def test_resolve_paper_url_from_doi(library):
     store.store_paper(BIB)
-    assert store.resolve_paper_url(store.get_paper("vaswani2017")) == "https://doi.org/10.48550/arxiv.1706.03762"
+    assert (
+        store.resolve_paper_url(store.get_paper("vaswani2017"))
+        == "https://doi.org/10.48550/arxiv.1706.03762"
+    )
 
 
 def test_resolve_paper_url_prefers_explicit_url(library):
-    store.store_paper("@article{x, author={Vaswani, Ashish}, year={2017}, title={T}, url={https://example.org/p}, doi={10.1/x}}")
-    assert store.resolve_paper_url(store.get_paper("vaswani2017")) == "https://example.org/p"
+    store.store_paper(
+        "@article{x, author={Vaswani, Ashish}, year={2017}, title={T}, url={https://example.org/p}, doi={10.1/x}}"
+    )
+    assert (
+        store.resolve_paper_url(store.get_paper("vaswani2017"))
+        == "https://example.org/p"
+    )
 
 
 def test_resolve_paper_url_missing(library):

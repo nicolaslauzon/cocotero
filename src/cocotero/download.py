@@ -1,3 +1,4 @@
+import os
 import re
 import tempfile
 import time
@@ -102,9 +103,9 @@ _SOURCES: dict[str, Callable[[Paper, Config], str | None]] = {
 def _fetch_pdf(url: str) -> Path | None:
     response = requests.get(url, headers=user_agent(), timeout=60, stream=True)
     response.raise_for_status()
-    handle = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
-    handle.close()
-    target = Path(handle.name)
+    fd, name = tempfile.mkstemp(suffix=".pdf")
+    os.close(fd)
+    target = Path(name)
     with target.open("wb") as fh:
         for chunk in response.iter_content(65536):
             fh.write(chunk)
@@ -115,19 +116,27 @@ def _fetch_pdf(url: str) -> Path | None:
 
 
 def _should_handoff(paper: Paper, cfg: Config) -> bool:
-    return bool(cfg["proxy_prefix"]) and paper["doi"].startswith(_INSTITUTIONAL_PREFIXES)
+    return bool(cfg["proxy_prefix"]) and paper["doi"].startswith(
+        _INSTITUTIONAL_PREFIXES
+    )
 
 
 def _ezproxy_handoff(paper: Paper, cfg: Config) -> str | None:
     downloads = Path(cfg["downloads_dir"]).expanduser()
-    baseline = {path for path in downloads.glob("*.pdf")} if downloads.is_dir() else set()
+    baseline = (
+        {path for path in downloads.glob("*.pdf")} if downloads.is_dir() else set()
+    )
     landing = paper["url"] if paper["url"] else f"https://doi.org/{paper['doi']}"
-    console.print("[dim]Paywalled — opening your university proxy page in your browser…[/dim]")
+    console.print(
+        "[dim]Paywalled — opening your university proxy page in your browser…[/dim]"
+    )
     open_in_browser(f"{cfg['proxy_prefix']}{landing}")
     deadline = time.monotonic() + 300
     while time.monotonic() < deadline:
         time.sleep(2)
-        current = {path for path in downloads.glob("*.pdf")} if downloads.is_dir() else set()
+        current = (
+            {path for path in downloads.glob("*.pdf")} if downloads.is_dir() else set()
+        )
         new_files = current - baseline
         if not new_files:
             continue

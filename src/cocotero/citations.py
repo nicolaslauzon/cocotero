@@ -43,11 +43,17 @@ def _year(issued: object) -> str:
 
 
 def _to_hit(item: dict[str, object]) -> CrossrefHit:
-    title = str(item.get("title", [""])[0] if isinstance(item.get("title"), list) else item.get("title", ""))
+    title = str(
+        item.get("title", [""])[0]
+        if isinstance(item.get("title"), list)
+        else item.get("title", "")
+    )
     return {
         "doi": str(item.get("DOI", "")),
         "title": title,
-        "authors": _first_author(item.get("author", []) if isinstance(item.get("author"), list) else []),
+        "authors": _first_author(
+            item.get("author", []) if isinstance(item.get("author"), list) else []
+        ),
         "year": _year(item.get("issued")),
     }
 
@@ -77,7 +83,9 @@ def fetch_bibtex(doi: str) -> str:
 
 def fetch_bibtex_from_arxiv(arxiv_id: str) -> str:
     try:
-        response = requests.get(_ARXIV_API, params={"id_list": arxiv_id}, headers=user_agent(), timeout=15)
+        response = requests.get(
+            _ARXIV_API, params={"id_list": arxiv_id}, headers=user_agent(), timeout=15
+        )
         response.raise_for_status()
     except requests.RequestException as exc:
         raise CrossrefError(f"arXiv fetch failed for {arxiv_id}: {exc}") from exc
