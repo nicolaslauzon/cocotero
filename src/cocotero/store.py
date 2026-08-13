@@ -88,6 +88,9 @@ def _entries(bib_text: str) -> list[Entry]:
         raise StoreError(f"Could not parse BibTeX: {exc}") from exc
     if not library.entries:
         raise StoreError("No BibTeX entries found in the input.")
+    for entry in library.entries:
+        for field in entry.fields:
+            field.key = field.key.lower()
     return library.entries
 
 

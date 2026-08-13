@@ -47,29 +47,40 @@ def _read_paste() -> str:
     sys.stdout.flush()
     if not sys.stdin.isatty():
         return sys.stdin.read()
-    try:
-        first = input()
-    except EOFError:
-        return ""
+    first = _read_first_line()
     if not first.startswith("@"):
         return first
-    lines = [first]
+    return _drain_paste(first)
+
+
+def _read_first_line() -> str:
+    while True:
+        try:
+            line = input()
+        except EOFError:
+            return ""
+        if line.strip():
+            return line
+
+
+def _drain_paste(first: str) -> str:
+    parts = [first]
     depth = first.count("{") - first.count("}")
     while True:
-        timeout = 5.0 if depth > 0 else 0.3
+        timeout = 2.0 if depth > 0 else 0.3
         try:
             ready, _, _ = select.select([sys.stdin], [], [], timeout)
         except (OSError, ValueError):
             break
         if not ready:
             break
-        try:
-            line = input()
-        except EOFError:
+        chunk = sys.stdin.buffer.read1(65536)
+        if not chunk:
             break
-        lines.append(line)
-        depth += line.count("{") - line.count("}")
-    return "\n".join(lines)
+        text = chunk.decode("utf-8", errors="replace")
+        parts.append(text)
+        depth += text.count("{") - text.count("}")
+    return "\n".join(parts)
 
 
 def _extract_doi(text: str) -> str | None:

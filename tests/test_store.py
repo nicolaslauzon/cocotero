@@ -273,3 +273,38 @@ def test_get_paper_includes_keywords(library):
     store.store_paper(BIB)
     store.set_keywords("vaswani2017", {"attention"})
     assert store.get_paper("vaswani2017")["keywords"] == "attention"
+
+
+def test_store_paper_uppercase_fields(library):
+    valenti = """@Article{valenti2015,
+AUTHOR = {Valenti, Roberto G. and Dryanovski, Ivan and Xiao, Jizhong},
+TITLE = {{Keeping a Good Attitude: A Quaternion-Based Orientation Filter for IMUs and MARGs}},
+JOURNAL = {Sensors},
+YEAR = {2015},
+DOI = {10.3390/s150819302}
+}"""
+    result = store.store_paper(valenti)
+    assert result["key"] == "valenti2015"
+    assert "Keeping a Good Attitude" in result["title"]
+    assert store.find_by_doi(
+        store.Path(store.load_config()["library"]), "10.3390/s150819302"
+    )
+
+
+def test_store_papers_dedup_by_doi_ignores_field_case(library):
+    store.store_paper(BIB)
+    duplicate = BIB.replace("doi = {10.48550", "DOI = {10.48550")
+    result = store.store_paper(duplicate)
+    assert result["status"] == "skipped"
+
+
+def test_dedup_existing_uppercase_doi_field(library):
+    upper = """@article{dup2020,
+  author = {Vaswani, Ashish and Shazeer, Noam and Parmar, Niki},
+  title = {Attention is All You Need},
+  year = {2017},
+  DOI = {10.48550/arxiv.1706.03762}
+}"""
+    store.store_paper(upper)
+    result = store.store_paper(BIB)
+    assert result["status"] == "skipped"
