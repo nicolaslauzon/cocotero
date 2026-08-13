@@ -15,7 +15,7 @@ at a time and stop for validation.
 
 - Python >=3.11, managed with **uv** (see `.python-version`)
 - `src/` layout, package name `cocotero`
-- Deps: `requests`, `bibtexparser` (v2 beta API), `rich`
+- Deps: `requests`, `bibtexparser` (v2 beta API), `rich`; optional extra `ezproxy` (`playwright`)
 - Interactive picking uses the external `fzf` binary (installed at `/usr/bin/fzf`)
 - CLI: stdlib `argparse` (no click/typer)
 
@@ -25,6 +25,10 @@ at a time and stop for validation.
 uv sync                    # install deps into .venv
 uv run cocotero --help     # run the CLI
 uv run cocotero add        # paste DOI, arXiv link, title, or BibTeX, press Enter
+
+# optional: Playwright auto-fetch of paywalled PDFs
+uv sync --extra ezproxy
+uv run playwright install chromium
 
 # optional global install + tab completion
 uv tool install --from . cocotero
@@ -62,9 +66,10 @@ Strict standards — code must be 100% self-documenting:
   context managers).
 - Keep modules small and single-purpose (see PLAN.md "Modules"):
   - `config.py` — lazy config/library init
-  - `store.py` — on-disk storage, bibkeys, dedup, listing
+  - `store.py` — on-disk storage, bibkeys, indexed dedup, listing, categories, `clean_library`
   - `citations.py` — Crossref lookups (Step 3)
-  - `download.py` — PDF source chain + EZproxy handoff (Step 4)
+  - `download.py` — parallel PDF source discovery + handoff (Step 4/9)
+  - `ezproxy.py` — Playwright persistent login + auto fetch (Step 9)
   - `ui.py` — `fzf_select` + `open_in_browser`
   - `cli.py` — argparse subcommands; the only place args are parsed
 - Private helpers prefixed `_`; no `from __future__ import annotations`.
@@ -83,11 +88,17 @@ Strict standards — code must be 100% self-documenting:
 - Pasted BibTeX is sanitized of ANSI escape sequences (`\x1bE`, CSI, ...) before
   parsing — bibtexparser's lenient parser otherwise bakes them into field keys.
 - Same DOI (or same normalized title when no DOI) already in library → **skip**
-  with a message, never a hard error; batch adds keep going.
-- PDF priority order is IEEE → Semantic Scholar → Unpaywall → arXiv (stored in
-  config `pdf_priority`; IEEE has no direct fetcher — its OA copies come via
-  Semantic Scholar / Unpaywall). Institutional access = EZproxy `proxy_prefix` +
-  watch `downloads_dir` (~/Downloads) for browser-downloaded PDFs (single adds only).
+  with a message, never a hard error; batch adds keep going. Dedup uses a
+  one-shot `LibraryIndex` (DOI + normalized title) so batches don't rescan.
+- User categories live in the `category` field; bibliographic `keywords` from
+  Crossref/arXiv are stripped on store. `cocotero clean` migrates legacy
+  `keywords` → `category` (keeping only `--keep` cats, default `dubois2026`).
+- PDF priority order is IEEE → Semantic Scholar → Unpaywall → Crossref → arXiv
+  (stored in config `pdf_priority`; IEEE has no direct fetcher — its OA copies
+  come via Semantic Scholar / Unpaywall / Crossref). Sources are queried in
+  parallel; fetch the first hit. Institutional access = EZproxy `proxy_prefix` +
+  watch `downloads_dir` (~/Downloads) for browser-downloaded PDFs (assisted), or
+  a persistent Playwright profile saved by `cocotero login` (auto, `--handoff`).
 - When in doubt about where a feature belongs or which step it is, check PLAN.md
   and follow the current step's spec exactly.
 

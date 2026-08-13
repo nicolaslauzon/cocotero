@@ -236,43 +236,75 @@ def test_resolve_paper_url_missing(library):
         store.resolve_paper_url(store.get_paper("vaswani2017"))
 
 
-def test_keywords_roundtrip(library):
+def test_categories_roundtrip(library):
     result = store.store_paper(BIB)
-    assert store.keywords(result["key"]) == set()
-    store.set_keywords(result["key"], {"imu", "deep-learning"})
-    assert store.keywords(result["key"]) == {"imu", "deep-learning"}
+    assert store.categories(result["key"]) == set()
+    store.set_categories(result["key"], {"imu", "deep-learning"})
+    assert store.categories(result["key"]) == {"imu", "deep-learning"}
     text = (library / result["key"] / "entry.bib").read_text()
-    assert "keywords = {deep-learning, imu}" in text
-    store.set_keywords(result["key"], set())
-    assert store.keywords(result["key"]) == set()
-    assert "keywords" not in (library / result["key"] / "entry.bib").read_text()
+    assert "category = {deep-learning, imu}" in text
+    store.set_categories(result["key"], set())
+    assert store.categories(result["key"]) == set()
+    assert "category" not in (library / result["key"] / "entry.bib").read_text()
 
 
-def test_toggle_keyword(library):
+def test_toggle_category(library):
     result = store.store_paper(BIB)
-    assert store.toggle_keyword(result["key"], "imu") is True
-    assert store.keywords(result["key"]) == {"imu"}
-    assert store.toggle_keyword(result["key"], "imu") is False
-    assert store.keywords(result["key"]) == set()
+    assert store.toggle_category(result["key"], "imu") is True
+    assert store.categories(result["key"]) == {"imu"}
+    assert store.toggle_category(result["key"], "imu") is False
+    assert store.categories(result["key"]) == set()
 
 
 def test_list_papers_filter_by_category(library):
     store.store_paper(BIB)
-    store.set_keywords("vaswani2017", {"transformers"})
+    store.set_categories("vaswani2017", {"transformers"})
     assert len(store.list_papers(category="transformers")) == 1
     assert store.list_papers(category="imu") == []
 
 
 def test_list_categories_counts(library):
     store.store_paper(BIB)
-    store.set_keywords("vaswani2017", {"attention", "transformers"})
+    store.set_categories("vaswani2017", {"attention", "transformers"})
     assert sorted(store.list_categories()) == [("attention", 1), ("transformers", 1)]
 
 
-def test_get_paper_includes_keywords(library):
+def test_get_paper_includes_categories(library):
     store.store_paper(BIB)
-    store.set_keywords("vaswani2017", {"attention"})
-    assert store.get_paper("vaswani2017")["keywords"] == "attention"
+    store.set_categories("vaswani2017", {"attention"})
+    assert store.get_paper("vaswani2017")["categories"] == "attention"
+
+
+def test_store_paper_drops_bibliographic_keywords(library):
+    bib = BIB.replace(
+        "title={Attention is All You Need}",
+        "title={Attention is All You Need}, keywords={transformer, nlp}",
+    )
+    store.store_paper(bib)
+    text = (library / "vaswani2017" / "entry.bib").read_text()
+    assert "keywords" not in text
+    assert store.categories("vaswani2017") == set()
+
+
+def test_clean_library_dedup_and_migrate(library):
+    kept = library / "vaswani2017"
+    kept.mkdir()
+    (kept / "entry.bib").write_text(
+        BIB.replace("}\n}", "},\n  keywords = {dubois2026, robot}\n}")
+    )
+    dup = library / "vaswani2017-2"
+    dup.mkdir()
+    (dup / "entry.bib").write_text(
+        BIB.replace("10.48550/arxiv.1706.03762", "10.9999/different")
+    )
+    report = store.clean_library(keep_categories={"dubois2026"})
+    assert report["removed"] == [("vaswani2017-2", "title")]
+    assert report["kept"] == 1
+    folders = list(library.glob("*/entry.bib"))
+    assert len(folders) == 1
+    text = (kept / "entry.bib").read_text()
+    assert "keywords" not in text
+    assert "category = {dubois2026}" in text
 
 
 def test_store_paper_uppercase_fields(library):

@@ -16,19 +16,21 @@ from .citations import (
     search_by_title,
 )
 from .config import load_config
-from .download import download_pdf
+from .download import _should_handoff, download_pdf, handoff_paywalled
 from .store import (
     StoreError,
+    categories,
+    clean_library,
     get_paper,
-    keywords,
     link_pdf,
     list_categories,
     list_papers,
+    paper_from_result,
     resolve_paper_url,
     search_index,
-    set_keywords,
+    set_categories,
     store_papers,
-    toggle_keyword,
+    toggle_category,
 )
 from .ui import fzf_select, open_in_browser
 
@@ -162,6 +164,39 @@ def _get_bibtex(args: argparse.Namespace) -> str:
     return _route_paste(_read_paste())
 
 
+def _download_for(results: list[dict], interactive: bool, handoff_mode: str) -> int:
+    cfg = load_config()
+    added = [
+        paper_from_result(result)
+        for result in results
+        if result["status"] == "added" and not result["pdf"]
+    ]
+    pdf_count = 0
+    if interactive:
+        for paper in added:
+            outcome = download_pdf(paper, interactive=True)
+            if outcome["pdf"]:
+                pdf_count += 1
+                console.print(f"  [green]PDF[/green] via {outcome['source']}")
+        return pdf_count
+    paywalled: list = []
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {pool.submit(download_pdf, paper): paper for paper in added}
+        for future in as_completed(futures):
+            paper = futures[future]
+            outcome = future.result()
+            if outcome["pdf"]:
+                pdf_count += 1
+                console.print(f"  [green]PDF[/green] via {outcome['source']}")
+            else:
+                paywalled.append(paper)
+    paywalled = [paper for paper in paywalled if _should_handoff(paper, cfg)]
+    if paywalled:
+        console.print(f"[dim]Handing off {len(paywalled)} paywalled paper(s)…[/dim]")
+        pdf_count += handoff_paywalled(paywalled, cfg, handoff_mode)
+    return pdf_count
+
+
 def cmd_add(args: argparse.Namespace) -> None:
     bib_text = _get_bibtex(args).strip()
     if not bib_text:
@@ -176,7 +211,7 @@ def cmd_add(args: argparse.Namespace) -> None:
         console.print("[red]No valid BibTeX entries found.[/red]")
         raise SystemExit(1)
     interactive = len(results) == 1
-    pdf_count = 0
+    handoff_mode = getattr(args, "handoff", None) or load_config()["handoff_mode"]
     for result in results:
         if result["status"] == "added":
             console.print(
@@ -186,15 +221,7 @@ def cmd_add(args: argparse.Namespace) -> None:
             console.print(
                 f"[yellow]Skipped[/yellow] [bold]{result['key']}[/bold] — already in library"
             )
-        if result["status"] == "added" and not result["pdf"]:
-            paper = get_paper(result["key"])
-            if paper is not None:
-                outcome = download_pdf(paper, interactive=interactive)
-                if outcome["pdf"]:
-                    pdf_count += 1
-                    console.print(f"  [green]PDF[/green] via {outcome['source']}")
-                elif interactive:
-                    console.print("  [yellow]PDF: not found (paywalled).[/yellow]")
+    pdf_count = _download_for(results, interactive, handoff_mode)
     if len(results) == 1 and results[0]["status"] == "added":
         result = results[0]
         pdf_file = Path(result["folder"]) / "paper.pdf"
@@ -231,7 +258,7 @@ def cmd_list(args: argparse.Namespace) -> None:
             paper["year"],
             paper["authors"],
             paper["title"],
-            paper["keywords"] or "—",
+            paper["categories"] or "—",
             "yes" if paper["has_pdf"] else "no",
         )
     console.print(table)
@@ -240,13 +267,13 @@ def cmd_list(args: argparse.Namespace) -> None:
 def cmd_cat(args: argparse.Namespace) -> None:
     try:
         if args.cat:
-            added = toggle_keyword(args.key, args.cat)
+            added = toggle_category(args.key, args.cat)
             verb = "Added" if added else "Removed"
             console.print(
                 f"[green]{verb}[/green] tag '{args.cat}' [bold]{args.key}[/bold]."
             )
         else:
-            tags = keywords(args.key)
+            tags = categories(args.key)
             listing = ", ".join(sorted(tags)) if tags else "(none)"
             console.print(f"Tags for [bold]{args.key}[/bold]: {listing}")
     except StoreError as exc:
@@ -287,13 +314,9 @@ def cmd_cluster(args: argparse.Namespace) -> None:
         console.print("[red]No valid BibTeX entries found.[/red]")
         raise SystemExit(1)
     for result in results:
-        set_keywords(result["key"], keywords(result["key"]) | {args.category})
-    pdf_count = 0
-    for result in results:
-        if result["status"] == "added" and not result["pdf"]:
-            paper = get_paper(result["key"])
-            if paper is not None and download_pdf(paper).get("pdf"):
-                pdf_count += 1
+        set_categories(result["key"], categories(result["key"]) | {args.category})
+    handoff_mode = getattr(args, "handoff", None) or load_config()["handoff_mode"]
+    pdf_count = _download_for(results, interactive=False, handoff_mode=handoff_mode)
     for result in results:
         if result["status"] == "added":
             console.print(
@@ -404,6 +427,28 @@ def cmd_open(args: argparse.Namespace) -> None:
         _open_paper_url(key)
 
 
+def cmd_clean(args: argparse.Namespace) -> None:
+    keep = set(args.keep) or None
+    try:
+        report = clean_library(keep_categories=keep)
+    except StoreError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1)
+    console.print(f"[green]Cleaned[/green] library: {report['kept']} papers kept.")
+    for key, reason in report["removed"]:
+        console.print(f"  [yellow]Removed[/yellow] {key} (duplicate by {reason})")
+
+
+def cmd_login(_args: argparse.Namespace) -> None:
+    try:
+        from .ezproxy import login
+
+        login()
+    except StoreError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cocotero", description="CLI paper manager.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -424,6 +469,11 @@ def build_parser() -> argparse.ArgumentParser:
         "-t", "--title", help="Article title (Crossref lookup + fzf pick)."
     )
     add.add_argument("-d", "--doi", help="DOI (Crossref BibTeX lookup).")
+    add.add_argument(
+        "--handoff",
+        choices=["assisted", "auto"],
+        help="Paywalled-paper strategy (default: config 'handoff_mode').",
+    )
     add.set_defaults(func=cmd_add)
 
     list_parser = sub.add_parser("list", help="List all papers.")
@@ -455,6 +505,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cluster_parser.add_argument("category")
     cluster_parser.add_argument("text", nargs="*")
+    cluster_parser.add_argument(
+        "--handoff",
+        choices=["assisted", "auto"],
+        help="Paywalled-paper strategy (default: config 'handoff_mode').",
+    )
     cluster_parser.set_defaults(func=cmd_cluster)
 
     pdf_parser = sub.add_parser(
@@ -471,6 +526,23 @@ def build_parser() -> argparse.ArgumentParser:
     rm_parser = sub.add_parser("rm", help="Remove a paper from the library.")
     rm_parser.add_argument("key")
     rm_parser.set_defaults(func=cmd_rm)
+
+    clean_parser = sub.add_parser(
+        "clean",
+        help="Deduplicate the library and keep only user categories.",
+    )
+    clean_parser.add_argument(
+        "--keep",
+        action="append",
+        default=[],
+        help="User categories to preserve (repeatable; default: dubois2026).",
+    )
+    clean_parser.set_defaults(func=cmd_clean)
+
+    sub.add_parser(
+        "login", help="Save an EZproxy session for auto PDF downloads."
+    ).set_defaults(func=cmd_login)
+
     return parser
 
 

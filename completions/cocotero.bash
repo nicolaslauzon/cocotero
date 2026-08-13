@@ -2,7 +2,7 @@ _cocotero() {
   local cur
   cur="${COMP_WORDS[COMP_CWORD]}"
   if (( COMP_CWORD == 1 )); then
-    COMPREPLY=($(compgen -W "add list open cat cats cluster pdf rm" -- "$cur"))
+    COMPREPLY=($(compgen -W "add list open cat cats cluster pdf rm clean login" -- "$cur"))
     return
   fi
   case "${COMP_WORDS[1]}" in

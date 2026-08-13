@@ -52,9 +52,13 @@ def test_download_pdf_via_semanticscholar(library, monkeypatch):
 
     def fake_get(url, params=None, headers=None, timeout=None, stream=False):
         urls.append(url)
-        return FakeResponse(
-            payload={"data": [{"openAccessPdf": {"url": "https://example.org/oa.pdf"}}]}
-        )
+        if "search" in url:
+            return FakeResponse(
+                payload={
+                    "data": [{"openAccessPdf": {"url": "https://example.org/oa.pdf"}}]
+                }
+            )
+        return FakeResponse(payload={"data": []})
 
     monkeypatch.setattr(download.requests, "get", fake_get)
     monkeypatch.setattr(download, "_fetch_pdf", lambda url: _pdf_path())
@@ -62,7 +66,7 @@ def test_download_pdf_via_semanticscholar(library, monkeypatch):
     outcome = download.download_pdf(paper, interactive=False)
     assert outcome["source"] == "semanticscholar"
     assert (library / "vaswani2017" / "paper.pdf").is_file()
-    assert urls == ["https://api.semanticscholar.org/graph/v1/paper/search"]
+    assert "https://api.semanticscholar.org/graph/v1/paper/search" in urls
 
 
 def test_download_pdf_via_unpaywall(library, monkeypatch):
@@ -78,6 +82,10 @@ def test_download_pdf_via_unpaywall(library, monkeypatch):
     def fake_get(url, params=None, headers=None, timeout=None, stream=False):
         if url.startswith("https://api.semanticscholar.org"):
             return FakeResponse(payload={"data": []})
+        if url == "https://export.arxiv.org/api/query":
+            return FakeResponse(payload={"data": []}, text="")
+        if url.startswith("https://api.crossref.org/works/"):
+            return FakeResponse(payload={"message": {}})
         assert url == "https://api.unpaywall.org/v2/10.1109/LRA.2020.3003256"
         assert params["email"] == "t@example.com"
         return FakeResponse(
@@ -98,7 +106,9 @@ def test_download_pdf_via_arxiv_url(library, monkeypatch):
     paper = _stored_paper(library, url="https://arxiv.org/abs/1706.03762")
 
     def fake_get(url, params=None, headers=None, timeout=None, stream=False):
-        assert url == "https://api.semanticscholar.org/graph/v1/paper/search"
+        assert url.startswith(
+            ("https://api.semanticscholar.org", "https://api.crossref.org")
+        )
         return FakeResponse(payload={"data": []})
 
     monkeypatch.setattr(download.requests, "get", fake_get)
@@ -157,6 +167,89 @@ def test_fetch_pdf_rejects_non_pdf_body(monkeypatch):
         lambda url, headers=None, timeout=None, stream=False: FakeStream(),
     )
     assert download._fetch_pdf("https://example.org/oa.pdf") is None
+
+
+def test_download_pdf_via_crossref(library, monkeypatch):
+    paper = _stored_paper(
+        library, doi="10.1109/LRA.2020.3003256", title="Denoising IMU"
+    )
+    (library / "config.toml").write_text(
+        f'library = "{library}"\n'
+        'unpaywall_email = "t@example.com"\n'
+        'proxy_prefix = ""\n'
+        f'downloads_dir = "{library}"\n'
+        'pdf_priority = ["crossref"]\n'
+    )
+
+    def fake_get(url, params=None, headers=None, timeout=None, stream=False):
+        assert url.startswith("https://api.crossref.org/works/")
+        return FakeResponse(
+            payload={
+                "message": {
+                    "link": [
+                        {
+                            "content-type": "application/pdf",
+                            "URL": "https://example.org/cr.pdf",
+                        }
+                    ]
+                }
+            }
+        )
+
+    monkeypatch.setattr(download.requests, "get", fake_get)
+    monkeypatch.setattr(download, "_fetch_pdf", lambda url: _pdf_path())
+
+    outcome = download.download_pdf(paper, interactive=False)
+    assert outcome["source"] == "crossref"
+    assert (library / "vaswani2017" / "paper.pdf").is_file()
+
+
+def test_unpaywall_uses_oa_locations_and_landing_conversion(monkeypatch):
+    cfg = {"unpaywall_email": "t@example.com"}
+    paper = {
+        "key": "x",
+        "year": "2020",
+        "authors": "A",
+        "title": "T",
+        "url": "",
+        "doi": "10.1109/X.1",
+        "has_pdf": False,
+        "folder": "",
+        "categories": "",
+    }
+    calls = []
+
+    def fake_get(url, params=None, headers=None, timeout=None, stream=False):
+        calls.append(url)
+        return FakeResponse(
+            payload={
+                "best_oa_location": {"url_for_pdf": None, "url_for_landing_page": None},
+                "oa_locations": [
+                    {
+                        "url_for_pdf": None,
+                        "url_for_landing_page": "https://www.mdpi.com/1234/5678",
+                    }
+                ],
+            }
+        )
+
+    monkeypatch.setattr(download.requests, "get", fake_get)
+    assert download._try_unpaywall(paper, cfg) == "https://www.mdpi.com/1234/5678/pdf"
+
+
+def test_landing_to_pdf_conversions():
+    assert (
+        download._landing_to_pdf("https://arxiv.org/abs/1706.03762")
+        == "https://arxiv.org/pdf/1706.03762"
+    )
+    assert (
+        download._landing_to_pdf("https://www.mdpi.com/1234/5678")
+        == "https://www.mdpi.com/1234/5678/pdf"
+    )
+    assert (
+        download._landing_to_pdf("https://example.org/paper?download=1")
+        == "https://example.org/paper?download=1"
+    )
 
 
 def test_ezproxy_handoff_picks_new_download(library, monkeypatch):

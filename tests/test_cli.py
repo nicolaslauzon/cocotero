@@ -99,9 +99,9 @@ def test_cmd_cat_toggle(tmp_path, monkeypatch):
     )
     args = argparse.Namespace(key="vaswani2017", cat="imu")
     cli.cmd_cat(args)
-    assert store.keywords("vaswani2017") == {"imu"}
+    assert store.categories("vaswani2017") == {"imu"}
     cli.cmd_cat(args)
-    assert store.keywords("vaswani2017") == set()
+    assert store.categories("vaswani2017") == set()
 
 
 def test_cmd_cat_shows_tags(tmp_path, monkeypatch):
@@ -109,9 +109,9 @@ def test_cmd_cat_shows_tags(tmp_path, monkeypatch):
     store.store_paper(
         "@article{x, author={Vaswani, Ashish}, year={2017}, title={T}, doi={10.1/x}}"
     )
-    store.set_keywords("vaswani2017", {"imu", "slam"})
+    store.set_categories("vaswani2017", {"imu", "slam"})
     cli.cmd_cat(argparse.Namespace(key="vaswani2017", cat=None))
-    assert store.keywords("vaswani2017") == {"imu", "slam"}
+    assert store.categories("vaswani2017") == {"imu", "slam"}
 
 
 def test_cmd_cluster_tags_all_papers(tmp_path, monkeypatch):
@@ -121,9 +121,35 @@ def test_cmd_cluster_tags_all_papers(tmp_path, monkeypatch):
         "@article{y, author={Brossard, Martin}, year={2020}, title={T2}, doi={10.2/y}}"
     )
     monkeypatch.setattr(cli, "_read_paste", lambda: bib)
+    monkeypatch.setattr(
+        cli,
+        "download_pdf",
+        lambda paper, interactive=False: {"source": None, "pdf": None},
+    )
     cli.cmd_cluster(argparse.Namespace(category="paper-1", text=[]))
-    assert store.keywords("vaswani2017") == {"paper-1"}
-    assert store.keywords("brossard2020") == {"paper-1"}
+    assert store.categories("vaswani2017") == {"paper-1"}
+    assert store.categories("brossard2020") == {"paper-1"}
+
+
+def test_cmd_clean_dedup(tmp_path, monkeypatch):
+    _isolated_library(tmp_path, monkeypatch)
+    kept = tmp_path / "vaswani2017"
+    kept.mkdir()
+    (kept / "entry.bib").write_text(
+        "@article{x, author={Vaswani, Ashish}, year={2017}, title={T}, "
+        "doi={10.1/x}, keywords={dubois2026, robot}}"
+    )
+    dup = tmp_path / "vaswani2017-2"
+    dup.mkdir()
+    (dup / "entry.bib").write_text(
+        "@article{x, author={Vaswani, Ashish}, year={2017}, title={T}, doi={10.1/x}}"
+    )
+    cli.cmd_clean(argparse.Namespace(keep=[]))
+    folders = list(tmp_path.glob("*/entry.bib"))
+    assert len(folders) == 1
+    text = (kept / "entry.bib").read_text()
+    assert "category = {dubois2026}" in text
+    assert "keywords" not in text
 
 
 def test_cmd_pdf_links_local_file(tmp_path, monkeypatch):

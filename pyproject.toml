@@ -13,6 +13,11 @@ dependencies = [
     "rich>=13.0",
 ]
 
+[project.optional-dependencies]
+ezproxy = [
+    "playwright>=1.40",
+]
+
 [project.scripts]
 cocotero = "cocotero.cli:main"
 

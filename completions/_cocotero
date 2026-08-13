@@ -2,7 +2,7 @@
 
 _cocotero() {
   local -a commands keys
-  commands=(add list open cat cats cluster pdf rm)
+  commands=(add list open cat cats cluster pdf rm clean login)
   if (( CURRENT == 2 )); then
     _describe 'command' commands
     return

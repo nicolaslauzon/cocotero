@@ -4,6 +4,7 @@ import tempfile
 import time
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import TypedDict
 
@@ -37,33 +38,102 @@ _INSTITUTIONAL_PREFIXES = (
 
 
 def _try_semanticscholar(paper: Paper, _cfg: Config) -> str | None:
-    response = requests.get(
-        "https://api.semanticscholar.org/graph/v1/paper/search",
-        params={"query": paper["title"], "fields": "openAccessPdf,externalIds"},
-        headers=user_agent(),
-        timeout=15,
-    )
-    response.raise_for_status()
-    for item in response.json().get("data", []):
-        open_pdf = item.get("openAccessPdf")
-        if open_pdf and open_pdf.get("url"):
-            return open_pdf["url"]
+    if paper["doi"]:
+        try:
+            response = requests.get(
+                f"https://api.semanticscholar.org/graph/v1/paper/DOI:{paper['doi']}",
+                params={"fields": "openAccessPdf"},
+                headers=user_agent(),
+                timeout=10,
+            )
+            response.raise_for_status()
+            location = response.json().get("openAccessPdf")
+            if location and location.get("url"):
+                return location["url"]
+        except (requests.RequestException, ValueError, KeyError):
+            pass
+    try:
+        response = requests.get(
+            "https://api.semanticscholar.org/graph/v1/paper/search",
+            params={"query": paper["title"], "fields": "openAccessPdf"},
+            headers=user_agent(),
+            timeout=10,
+        )
+        response.raise_for_status()
+        for item in response.json().get("data", []):
+            location = item.get("openAccessPdf")
+            if location and location.get("url"):
+                return location["url"]
+    except (requests.RequestException, ValueError, KeyError):
+        pass
     return None
+
+
+def _landing_to_pdf(url: str) -> str | None:
+    if not url:
+        return None
+    arxiv = re.search(r"arxiv\.org/(?:abs|pdf)/([^/\s]+)", url)
+    if arxiv:
+        return f"https://arxiv.org/pdf/{arxiv.group(1)}"
+    if "mdpi.com" in url:
+        base = url.rstrip("/")
+        return base if base.endswith("/pdf") else f"{base}/pdf"
+    return url
 
 
 def _try_unpaywall(paper: Paper, cfg: Config) -> str | None:
     if not paper["doi"] or not cfg["unpaywall_email"]:
         return None
-    response = requests.get(
-        f"https://api.unpaywall.org/v2/{paper['doi']}",
-        params={"email": cfg["unpaywall_email"]},
-        headers=user_agent(),
-        timeout=15,
-    )
-    response.raise_for_status()
-    location = response.json().get("best_oa_location")
-    if location and location.get("url_for_pdf"):
-        return location["url_for_pdf"]
+    try:
+        response = requests.get(
+            f"https://api.unpaywall.org/v2/{paper['doi']}",
+            params={"email": cfg["unpaywall_email"]},
+            headers=user_agent(),
+            timeout=10,
+        )
+        response.raise_for_status()
+    except (requests.RequestException, ValueError):
+        return None
+    payload = response.json()
+    locations = []
+    if payload.get("best_oa_location"):
+        locations.append(payload["best_oa_location"])
+    locations.extend(payload.get("oa_locations") or [])
+    for location in locations:
+        pdf_url = location.get("url_for_pdf") if location else None
+        if pdf_url:
+            return pdf_url
+    for location in locations:
+        if not location:
+            continue
+        landing = location.get("url_for_landing_page") or location.get("url")
+        converted = _landing_to_pdf(landing)
+        if converted:
+            return converted
+    return None
+
+
+def _try_crossref(paper: Paper, cfg: Config) -> str | None:
+    if not paper["doi"]:
+        return None
+    try:
+        response = requests.get(
+            f"https://api.crossref.org/works/{paper['doi']}",
+            params={"mailto": cfg["unpaywall_email"]} if cfg["unpaywall_email"] else {},
+            headers=user_agent(),
+            timeout=10,
+        )
+        response.raise_for_status()
+    except (requests.RequestException, ValueError):
+        return None
+    links = (response.json().get("message") or {}).get("link") or []
+    for link in links:
+        if link.get("content-type") == "application/pdf" and link.get("URL"):
+            return link["URL"]
+    for link in links:
+        url = link.get("URL")
+        if url and re.search(r"\.pdf(\?|$)", url, re.IGNORECASE):
+            return url
     return None
 
 
@@ -77,7 +147,7 @@ def _arxiv_id_from_title(title: str) -> str | None:
         _ARXIV_API,
         params={"search_query": f'ti:"{title}"', "max_results": 1},
         headers=user_agent(),
-        timeout=15,
+        timeout=10,
     )
     response.raise_for_status()
     entry = ET.fromstring(response.text).find("a:entry", _ATOM_NS)
@@ -87,7 +157,12 @@ def _arxiv_id_from_title(title: str) -> str | None:
 
 
 def _try_arxiv(paper: Paper, _cfg: Config) -> str | None:
-    arxiv_id = _arxiv_id_from_url(paper["url"]) or _arxiv_id_from_title(paper["title"])
+    arxiv_id = _arxiv_id_from_url(paper["url"])
+    if not arxiv_id:
+        try:
+            arxiv_id = _arxiv_id_from_title(paper["title"])
+        except (requests.RequestException, ET.ParseError):
+            return None
     if not arxiv_id:
         return None
     return f"https://arxiv.org/pdf/{arxiv_id}"
@@ -96,8 +171,29 @@ def _try_arxiv(paper: Paper, _cfg: Config) -> str | None:
 _SOURCES: dict[str, Callable[[Paper, Config], str | None]] = {
     "semanticscholar": _try_semanticscholar,
     "unpaywall": _try_unpaywall,
+    "crossref": _try_crossref,
     "arxiv": _try_arxiv,
 }
+
+
+def _discover_urls(paper: Paper, cfg: Config) -> list[tuple[str, str]]:
+    fetchers = [
+        (name, _SOURCES[name]) for name in cfg["pdf_priority"] if name in _SOURCES
+    ]
+    if not fetchers:
+        return []
+    found: dict[str, str] = {}
+    with ThreadPoolExecutor(max_workers=len(fetchers)) as pool:
+        futures = {pool.submit(fetch, paper, cfg): name for name, fetch in fetchers}
+        for future in as_completed(futures):
+            name = futures[future]
+            try:
+                url = future.result()
+            except requests.RequestException:
+                continue
+            if url:
+                found[name] = url
+    return [(name, found[name]) for name in cfg["pdf_priority"] if name in found]
 
 
 def _fetch_pdf(url: str) -> Path | None:
@@ -128,7 +224,7 @@ def _ezproxy_handoff(paper: Paper, cfg: Config) -> str | None:
     )
     landing = paper["url"] if paper["url"] else f"https://doi.org/{paper['doi']}"
     console.print(
-        "[dim]Paywalled — opening your university proxy page in your browser…[/dim]"
+        f"[dim]Paywalled — opening your university proxy page for {paper['key']}…[/dim]"
     )
     open_in_browser(f"{cfg['proxy_prefix']}{landing}")
     deadline = time.monotonic() + 300
@@ -148,18 +244,39 @@ def _ezproxy_handoff(paper: Paper, cfg: Config) -> str | None:
     return None
 
 
+def handoff_paywalled(papers: list[Paper], cfg: Config, mode: str) -> int:
+    linked = 0
+    if mode == "auto":
+        from . import ezproxy
+
+        results = ezproxy.fetch_pdfs(papers)
+        for paper in papers:
+            temp = results.get(paper["key"])
+            if not temp:
+                continue
+            try:
+                link_pdf(paper["key"], temp)
+                linked += 1
+                console.print(f"[green]{paper['key']}[/green] — PDF via ezproxy")
+            except StoreError:
+                pass
+            finally:
+                Path(temp).unlink(missing_ok=True)
+        return linked
+    for paper in papers:
+        try:
+            stored = _ezproxy_handoff(paper, cfg)
+        except (StoreError, OSError):
+            continue
+        if stored:
+            linked += 1
+            console.print(f"[green]{paper['key']}[/green] — PDF via ezproxy")
+    return linked
+
+
 def download_pdf(paper: Paper, interactive: bool = False) -> DownloadResult:
     cfg = load_config()
-    for source in cfg["pdf_priority"]:
-        fetcher = _SOURCES.get(source)
-        if fetcher is None:
-            continue
-        try:
-            url = fetcher(paper, cfg)
-        except (requests.RequestException, ValueError, ET.ParseError, KeyError):
-            continue
-        if not url:
-            continue
+    for source, url in _discover_urls(paper, cfg):
         temp: Path | None = None
         try:
             temp = _fetch_pdf(url)

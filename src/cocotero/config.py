@@ -17,6 +17,7 @@ class Config(TypedDict):
     proxy_prefix: str
     downloads_dir: str
     pdf_priority: list[str]
+    handoff_mode: str
 
 
 DEFAULTS: Config = {
@@ -24,8 +25,13 @@ DEFAULTS: Config = {
     "unpaywall_email": "",
     "proxy_prefix": "",
     "downloads_dir": str(HOME / "Downloads"),
-    "pdf_priority": ["ieee", "semanticscholar", "unpaywall", "arxiv"],
+    "pdf_priority": ["ieee", "semanticscholar", "unpaywall", "crossref", "arxiv"],
+    "handoff_mode": "assisted",
 }
+
+
+def config_dir() -> Path:
+    return Path(os.environ.get("COCOTERO_CONFIG", str(CONFIG_PATH))).parent
 
 
 def _defaults_toml() -> str:

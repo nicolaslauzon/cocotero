@@ -9,15 +9,15 @@ CLI paper manager (Zotero clone) for scientific reading. All state lives as **pl
 - **Storage:** folder-per-paper in `~/cocotero/library/`.
 - **BibTeX input:** raw text pasted into the command (Ctrl+C/Ctrl+V), not files. A file path is a secondary fallback only.
 - **`init` is automatic:** library dir + config auto-create on first run of any command (lazy init). There is **no** `init` command.
-- **Institutional access:** EZproxy-style `proxy_prefix` + Firefox `~/Downloads` watch for browser-assisted PDF handoff.
-- **PDF priority:** IEEE → Semantic Scholar → Unpaywall → arXiv.
+- **Institutional access:** EZproxy-style `proxy_prefix` + Firefox `~/Downloads` watch for browser-assisted PDF handoff; optional Playwright auto-fetch (`cocotero login`, `--handoff auto`).
+- **PDF priority:** IEEE → Semantic Scholar → Unpaywall → Crossref → arXiv.
 
 ## Storage model
 
 ```
 ~/cocotero/library/
   <bibkey>/
-    entry.bib     # BibTeX + injected fields: file, url, doi, keywords
+    entry.bib     # BibTeX + injected fields: file, url, doi, category
     paper.pdf     # optional; absent when paywalled
 ```
 
@@ -28,9 +28,12 @@ CLI paper manager (Zotero clone) for scientific reading. All state lives as **pl
   - `file = {:paper.pdf:PDF}` — links the stored PDF
   - `url` — landing page (opens in browser)
   - `doi` — used for dedup + download
-  - `keywords = {cat1, cat2}` — categories
+  - `category = {cat1, cat2}` — user categories (bibliographic `keywords`
+    imported by Crossref/arXiv are stripped on store)
 - **Dedup rule:** a paper already present (same DOI, or same normalized title when
   no DOI) is **skipped** with a message — never a hard error. Batch adds continue.
+  Dedup uses a single in-memory index built once per batch (O(1) lookups), so a
+  50-entry paste validates against a 50-paper library in milliseconds.
 
 ## Config
 
@@ -41,31 +44,35 @@ library = "~/cocotero/library"
 unpaywall_email = ""               # set later, only needed for Unpaywall
 proxy_prefix = ""                  # e.g. https://ezproxy.youruni.edu/login?url=
 downloads_dir = "~/Downloads"      # Firefox default; watched for new PDFs
-pdf_priority = ["ieee", "semanticscholar", "unpaywall", "arxiv"]
+pdf_priority = ["ieee", "semanticscholar", "unpaywall", "crossref", "arxiv"]
+handoff_mode = "assisted"          # or "auto" (Playwright)
 ```
 
 ## Modules (`src/cocotero/`)
 
 - `cli.py` — `argparse` subcommands; the only place that parses args.
 - `config.py` — load/create config + library dir (lazy init); shared `user_agent`.
-- `store.py` — bibkey gen, slugify, write/read `entry.bib`, copy/link PDF, dedup, keywords, list library.
+- `store.py` — bibkey gen, slugify, write/read `entry.bib`, copy/link PDF, dedup (indexed), categories, `clean_library`.
 - `citations.py` — Crossref search/fetch by title or DOI → BibTeX text.
-- `download.py` — PDF source chain + EZproxy handoff + Downloads watch.
+- `download.py` — parallel PDF source discovery + EZproxy handoff + Downloads watch.
+- `ezproxy.py` — Playwright persistent-context login (`cocotero login`) + auto PDF fetch (optional extra `ezproxy`).
 - `ui.py` — `fzf_select(items, preview_cmd)` wrapper + `open_in_browser(url)`.
 
 ## Commands
 
 | Command | Purpose |
 |---|---|
-| `cocotero add` | single or batch add; auto-detects DOI / arXiv / title / BibTeX |
+| `cocotero add` | single or batch add; auto-detects DOI / arXiv / title / BibTeX; `--handoff assisted\|auto` |
 | `cocotero add -b "<raw bibtex>"` | inline paste; `--pdf path.pdf` optional |
 | `cocotero add -t "<title>"` / `-d <doi>` | auto bibtex |
 | `cocotero open [key] [--cat X]` | no key: fzf pick → open in browser; filter by category |
 | `cocotero list [--cat X]` | table of papers (optionally one category) |
 | `cocotero cat <key> [<cat>]` | toggle a category tag; show tags without a category |
-| `cocotero cats` | category counts |
-| `cocotero cluster <category>` | paste a bibliography → add all + tag all with the category |
+| `cocotero cats` | category counts (user categories only) |
+| `cocotero cluster <category>` | paste a bibliography → add all + tag all; `--handoff assisted\|auto` |
 | `cocotero pdf [key] [path]` | retry PDFs (all or one); link a local PDF file |
+| `cocotero clean [--keep cat …]` | deduplicate library + migrate kept categories |
+| `cocotero login` | save an EZproxy session for auto PDF downloads |
 | `cocotero rm <key>` | delete a paper folder |
 
 ## Add flow (interactive — the "easiest" path)
@@ -82,27 +89,28 @@ pdf_priority = ["ieee", "semanticscholar", "unpaywall", "arxiv"]
 
 ## PDF download chain (`download.py`)
 
-For each source in `pdf_priority`, try in order; first hit wins. IEEE is not a
-dedicated source — IEEE OA is resolved via Semantic Scholar / Unpaywall (IEEE
-direct is paywalled in practice):
+URL discovery runs the enabled sources **in parallel** (one thread per source),
+then fetches the first URL by `pdf_priority` order. IEEE is not a dedicated
+source — IEEE OA is resolved via Semantic Scholar / Unpaywall / Crossref:
 
-1. **Semantic Scholar** — `GET api.semanticscholar.org/graph/v1/paper/search?query={title}&fields=openAccessPdf,externalIds` → `openAccessPdf.url`.
-2. **Unpaywall** — `GET api.unpaywall.org/v2/{doi}?email=` (needs email; skipped if unset).
-3. **arXiv** — from the entry's `arxiv.org/...` URL, or via `export.arxiv.org/api/query` by title → `arxiv.org/pdf/<id>`.
+1. **Semantic Scholar** — `GET api.semanticscholar.org/graph/v1/paper/DOI:{doi}?fields=openAccessPdf` first; falls back to `paper/search?query={title}&fields=openAccessPdf`.
+2. **Unpaywall** — `GET api.unpaywall.org/v2/{doi}?email=` (needs email; skipped if unset). Scans `best_oa_location` **and** `oa_locations` for `url_for_pdf`; landing pages are converted (`arxiv.org/abs/…` → `/pdf/…`, MDPI → `/pdf`).
+3. **Crossref** — `GET api.crossref.org/works/{doi}` → `message.link[]` entries with `content-type: application/pdf`.
+4. **arXiv** — from the entry's `arxiv.org/...` URL, or via `export.arxiv.org/api/query` by title → `arxiv.org/pdf/<id>`.
 
-### Institutional fallback (browser handoff, single adds only)
+### Institutional fallback (browser handoff)
 
 All direct sources fail + DOI is an institutional publisher (`10.1109`,
-`10.1016`, `10.1007`, …) + `proxy_prefix` set + adding a **single** paper:
+`10.1016`, `10.1007`, …) + `proxy_prefix` set. Two modes (`handoff_mode` config,
+`--handoff` flag overrides; batches now support it too):
 
-1. Print `Paywalled — opening your university proxy page in your browser…`.
-2. Open `proxy_prefix + <article url>` in the default browser.
-3. Snapshot `downloads_dir` baseline, then watch for a **new** `.pdf` (~5 min
-   timeout). New file → copy to `<key>/paper.pdf`, inject `file` field. Multiple
-   candidates → pick via fzf.
-4. Timeout → entry saved without PDF; recover with `cocotero pdf <key>`.
-5. If `proxy_prefix` unset → skip handoff, just print the paywalled note.
-6. Batch adds / `cluster` / `pdf` retry never hand off — they report "not found".
+- **assisted** (default): open `proxy_prefix + <article url>` in the browser,
+  snapshot `downloads_dir`, watch for a **new** `.pdf` (~5 min timeout) → copy to
+  `<key>/paper.pdf`, inject `file`. Multiple candidates → pick via fzf.
+- **auto**: `cocotero login` once saves the EZproxy session into a persistent
+  Playwright Chromium profile (`config_dir()/playwright_profile`); later `auto`
+  handoffs silently fetch each paywalled PDF headlessly with that session
+  (needs `uv sync --extra ezproxy` + `uv run playwright install chromium`).
 
 ---
 
@@ -218,5 +226,33 @@ retries one (handoff allowed), `pdf <key> <path>` links a local file.
 
 **Acceptance:** full workflow end-to-end; `uv run pytest` and
 `uv run ruff check` green.
+
+**Status: done**
+
+## Step 9 — Speed, robust PDFs, clean cats + dedup
+
+**Goal:** cluster/add must be fast on a large library; PDF downloads must find
+more open copies and offer zero-click institutional access; `cats` must show only
+user categories; existing duplicates get removed once and new ones prevented.
+
+**Build:**
+- **Speed:** `store_papers` builds a one-shot `LibraryIndex` (by DOI + normalized
+  title) and validates each batch entry against it; `_entry_and_folder` uses an
+  O(1) `library/<key>` fast path. URL discovery runs all sources in parallel.
+- **PDF sources:** Semantic Scholar DOI endpoint first; Unpaywall scans
+  `best_oa_location` + `oa_locations` and converts landing pages; new Crossref
+  source (`message.link[]`); arXiv title-fallback kept.
+- **Cats:** bibliographic `keywords` stripped on store; user tags live in a new
+  `category` field (`keywords`→`categories`/`set_categories`/`toggle_category`);
+  `list_categories` reads only `category`.
+- **Dedup + clean:** new `cocotero clean` removes true duplicates (by DOI, else
+  normalized title) and migrates kept categories from legacy `keywords`.
+- **Institutional:** `cocotero login` saves a persistent Playwright EZproxy
+  session; `--handoff {assisted,auto}` + `handoff_mode` extend handoff to batches.
+
+**Acceptance:**
+- 54-entry paste against a real 54-paper library stores in <1s (all-rescan dedup gone).
+- `cocotero clean` removes only the real duplicate (`laidig2023-3`) and leaves 54 papers with a single `dubois2026` category.
+- `uv run pytest` (78 tests) and `uv run ruff check` green.
 
 **Status: done**
