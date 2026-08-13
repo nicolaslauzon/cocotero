@@ -2,108 +2,57 @@
 
 ## Project Overview
 
-Cocotero is a CLI paper manager (minimal Zotero clone) for scientific reading.
-It stores each paper as **plain documents** in `~/cocotero/library/<key>/`:
-`entry.bib` (BibTeX with injected `url`/`doi`/`file` fields) and an optional
-`paper.pdf`. Grep over the library is the index; `fzf` is the search UI.
+Cocotero is a CLI paper manager (minimal Zotero clone). Each paper is stored as
+plain documents in `~/cocotero/library/`: `bib/<key>.bib` (BibTeX with injected
+`url`/`doi`/`file`/`category` fields) and an optional `pdf/<key>.pdf`. Grep over
+the library is the index; `fzf` is the search UI. The CLI is fully built — no
+roadmap is tracked; README.md documents all commands.
 
-Full roadmap and per-step specs: **[PLAN.md](PLAN.md)**. Read it before working
-— it tracks which step is next and what each step must build. Implement one step
-at a time and stop for validation.
+## Stack & Setup
 
-## Tech Stack
-
-- Python >=3.11, managed with **uv** (see `.python-version`)
-- `src/` layout, package name `cocotero`
-- Deps: `requests`, `bibtexparser` (v2 beta API), `rich`; optional extra `ezproxy` (`playwright`)
-- Interactive picking uses the external `fzf` binary (installed at `/usr/bin/fzf`)
-- CLI: stdlib `argparse` (no click/typer)
-
-## Setup Commands
-
-```sh
-uv sync                    # install deps into .venv
-uv run cocotero --help     # run the CLI
-uv run cocotero add        # paste DOI, arXiv link, title, or BibTeX, press Enter
-
-# optional: Playwright auto-fetch of paywalled PDFs
-uv sync --extra ezproxy
-uv run playwright install chromium
-
-# optional global install + tab completion
-uv tool install --from . cocotero
-./scripts/install_completions.sh
-```
-
-Environment overrides (used heavily by tests): `COCOTERO_LIB` and
-`COCOTERO_CONFIG` point the library dir and config file elsewhere. The config +
-library auto-create on first run — there is deliberately **no** `init` command.
-
-## Testing Instructions
-
-- Run all tests: `uv run pytest`
-- Config lives in `pyproject.toml` under `[tool.pytest.ini_options]`.
-  NOTE: this machine has ROS (jazzy) on `PYTHONPATH` whose pytest plugins crash
-  (missing `yaml`); they are disabled via `addopts` — keep that line intact.
-- Tests live in `tests/test_store.py` (pytest). They monkeypatch `COCOTERO_LIB` /
-  `COCOTERO_CONFIG` to a tmp dir, so no test touches the real library.
-- Add a test for any new `store.py` behavior (slugify, keys, dedup, storage).
+- Python >=3.11, managed with **uv** (`src/` layout, package `cocotero`, stdlib
+  `argparse`). Deps: `requests`, `bibtexparser` (v2 beta), `rich`; optional
+  extra `ezproxy` (`playwright`).
+- Commands: `uv sync`; `uv run cocotero --help`; `uv run pytest`;
+  `uv run ruff check .`; `uv run ruff format .`.
+- Tests in `tests/` monkeypatch `COCOTERO_LIB`/`COCOTERO_CONFIG` to a tmp dir, so
+  no test touches the real library. Library + config auto-create on first run —
+  there is deliberately **no** `init` command.
+- `pyproject.toml` `addopts` disables ROS pytest plugins on this machine — keep
+  that line intact.
 
 ## Code Style
 
-Strict standards — code must be 100% self-documenting:
+- **Zero comments & zero docstrings**; PEP 8; PEP 484 explicit type hints.
+- Modern Python 3.11+ (built-in generics, `pathlib`, `dataclass`, `TypedDict`),
+  no `typing.List`/`Optional`, no `from __future__ import annotations`.
+- Small single-responsibility functions; private helpers prefixed `_`.
+- Modules: `config.py` (lazy config/library init), `store.py` (storage, bibkeys,
+  dedup, categories), `citations.py` (Crossref/arXiv lookups),
+  `download.py` (parallel PDF discovery + EZproxy handoff), `ezproxy.py`
+  (Playwright login/auto-fetch), `ui.py` (`fzf_select`, `open_in_browser`),
+  `cli.py` (argparse; only place args are parsed).
+- User-facing problems raise `StoreError` (or similar) and are printed via
+  `rich.console` in `cli.py` with a non-zero exit.
 
-- **Zero comments & zero docstrings** in code: no inline comments, block
-  comments, docstrings, or explanatory notes. Structure, function names, and
-  variable names carry all meaning.
-- **PEP 8** formatting/naming; **PEP 484** explicit type hints on all
-  parameters, returns, and ambiguous variables.
-- **Modern Python (3.11+):** built-in generics (`list[str]`, `int | None`),
-  `pathlib`, `dataclass`, `enum`, `TypedDict`; no `typing.List`/`Optional`, no
-  utility helpers that stdlib provides.
-- **KISS / DRY / SOLID:** small single-responsibility functions, no deep
-  nesting or monster methods; Pythonic idioms (comprehensions, generators,
-  context managers).
-- Keep modules small and single-purpose (see PLAN.md "Modules"):
-  - `config.py` — lazy config/library init
-  - `store.py` — on-disk storage, bibkeys, indexed dedup, listing, categories, `clean_library`
-  - `citations.py` — Crossref lookups (Step 3)
-  - `download.py` — parallel PDF source discovery + handoff (Step 4/9)
-  - `ezproxy.py` — Playwright persistent login + auto fetch (Step 9)
-  - `ui.py` — `fzf_select` + `open_in_browser`
-  - `cli.py` — argparse subcommands; the only place args are parsed
-- Private helpers prefixed `_`; no `from __future__ import annotations`.
-- User-facing problems raise `StoreError` (or a similar domain exception) and
-  are printed via `rich.console` in `cli.py` with a non-zero exit.
+## Gotchas
 
-## Key Conventions / Gotchas
+- `bibtexparser` v2 beta: use `parse_string`, `write_string(Library([entry]))`
+  (NOT a bare `Entry`), `entry.get(field)` returns a `Field` or `None` (use
+  `.value`). Malformed BibTeX parses leniently — 0 entries, not an exception;
+  always guard on empty `library.entries`. Sanitize ANSI escapes before parsing.
+- Bib/pdf file name == generated `{lastname}{year}` key, all lowercase (e.g.
+  `bib/brossard2020.bib`, `-2` suffix on collision); the pasted BibTeX key is
+  always rewritten to match. The injected `file` field is `:pdf/<key>.pdf:PDF`.
+- Dedup: same DOI (or same normalized title when no DOI) already in library →
+  **skip** with a message, never a hard error; batches keep going. One-shot
+  `LibraryIndex` per batch.
+- User categories live in the `category` field; bibliographic `keywords` are
+  stripped on store. `clean_library` migrates legacy `keywords` → `category`
+  (keeping only `--keep` cats).
+- PDF sources queried in parallel; first real PDF wins in `pdf_priority` order.
 
-- `bibtexparser` is v2 beta: use `parse_string`, `write_string(Library([entry]))`
-  (it does NOT accept a bare `Entry`), `entry.get(field)` returns a `Field` or
-  `None` (use `.value`), and `entry.key` is the citation key.
-- Malformed BibTeX is parsed **leniently** — 0 entries, not an exception. Always
-  guard on empty `library.entries`.
-- Folder name == generated `{lastname}{year}` citation key (all lowercase, e.g.
-  `brossard2020`); the key in the pasted BibTeX is always rewritten to match.
-- Pasted BibTeX is sanitized of ANSI escape sequences (`\x1bE`, CSI, ...) before
-  parsing — bibtexparser's lenient parser otherwise bakes them into field keys.
-- Same DOI (or same normalized title when no DOI) already in library → **skip**
-  with a message, never a hard error; batch adds keep going. Dedup uses a
-  one-shot `LibraryIndex` (DOI + normalized title) so batches don't rescan.
-- User categories live in the `category` field; bibliographic `keywords` from
-  Crossref/arXiv are stripped on store. `cocotero clean` migrates legacy
-  `keywords` → `category` (keeping only `--keep` cats, default `dubois2026`).
-- PDF priority order is IEEE → Semantic Scholar → Unpaywall → Crossref → arXiv
-  (stored in config `pdf_priority`; IEEE has no direct fetcher — its OA copies
-  come via Semantic Scholar / Unpaywall / Crossref). Sources are queried in
-  parallel; fetch the first hit. Institutional access = EZproxy `proxy_prefix` +
-  watch `downloads_dir` (~/Downloads) for browser-downloaded PDFs (assisted), or
-  a persistent Playwright profile saved by `cocotero login` (auto, `--handoff`).
-- When in doubt about where a feature belongs or which step it is, check PLAN.md
-  and follow the current step's spec exactly.
+## Commit Notes
 
-## Commit / PR Notes
-
-- One commit per validated step. Message style: `step N: <summary>`.
-- Before committing: `uv run pytest` must be green.
-- This repo is freshly `uv init`ed; no CI pipeline is configured yet.
+- One commit per logical change, style: `step N: <summary>`. `uv run pytest` and
+  `uv run ruff check .` must be green before committing.

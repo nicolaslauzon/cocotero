@@ -31,6 +31,10 @@ testpaths = ["tests"]
 requires = ["uv_build>=0.9.18,<0.10.0"]
 build-backend = "uv_build"
 
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",

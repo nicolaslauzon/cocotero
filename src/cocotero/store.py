@@ -54,6 +54,22 @@ def make_bibkey(first_author: str, year: str) -> str:
     return f"{slugify(first_author)}{slugify(year)}"
 
 
+def _bib_dir(library: Path) -> Path:
+    return library / "bib"
+
+
+def _pdf_dir(library: Path) -> Path:
+    return library / "pdf"
+
+
+def _bib_path(library: Path, key: str) -> Path:
+    return _bib_dir(library) / f"{key}.bib"
+
+
+def _pdf_path(library: Path, key: str) -> Path:
+    return _pdf_dir(library) / f"{key}.pdf"
+
+
 _ANSI_ESCAPE = re.compile(
     r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-9A-B]|\x1bE|\x1b."
 )
@@ -105,8 +121,15 @@ def _value(entry: Entry, field: str) -> str:
     return found.value if found else ""
 
 
+def _normalize_doi(value: str) -> str:
+    doi = value.strip().lower()
+    doi = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", doi)
+    doi = doi.removeprefix("doi:").strip()
+    return doi.rstrip(".,;:) ")
+
+
 def _doi(entry: Entry) -> str:
-    return _value(entry, "doi").strip().lower()
+    return _normalize_doi(_value(entry, "doi"))
 
 
 def _doi_url(doi: str) -> str:
@@ -130,20 +153,21 @@ def _keywords_text(keywords: set[str]) -> str:
 
 
 def _unique_key(library: Path, wanted: str) -> str:
-    if not (library / wanted).exists():
+    if not _bib_path(library, wanted).exists():
         return wanted
     n = 2
-    while (library / f"{wanted}-{n}").exists():
+    while _bib_path(library, f"{wanted}-{n}").exists():
         n += 1
     return f"{wanted}-{n}"
 
 
 def _scan(library: Path) -> list[tuple[Path, Entry]]:
     found = []
-    for entry_bib in sorted(library.glob("*/entry.bib")):
+    bibs = sorted(_bib_dir(library).glob("*.bib"), key=lambda path: path.stem)
+    for entry_bib in bibs:
         try:
             for entry in _entries(entry_bib.read_text(encoding="utf-8")):
-                found.append((entry_bib.parent, entry))
+                found.append((entry_bib, entry))
         except StoreError:
             continue
     return found
@@ -158,13 +182,13 @@ class LibraryIndex:
 def _build_index(library: Path) -> LibraryIndex:
     by_doi: dict[str, Path] = {}
     by_title: dict[str, Path] = {}
-    for folder, entry in _scan(library):
+    for entry_bib, entry in _scan(library):
         doi = _doi(entry)
         if doi:
-            by_doi.setdefault(doi, folder)
+            by_doi.setdefault(doi, entry_bib)
         title = _normalized_title(_value(entry, "title"))
         if title:
-            by_title.setdefault(title, folder)
+            by_title.setdefault(title, entry_bib)
     return LibraryIndex(by_doi=by_doi, by_title=by_title)
 
 
@@ -172,9 +196,9 @@ def find_by_doi(library: Path, doi: str) -> Path | None:
     doi = doi.strip().lower()
     if not doi:
         return None
-    for folder, entry in _scan(library):
+    for entry_bib, entry in _scan(library):
         if _doi(entry) == doi:
-            return folder
+            return entry_bib
     return None
 
 
@@ -182,18 +206,15 @@ def find_by_title(library: Path, title: str) -> Path | None:
     normalized = _normalized_title(title)
     if not normalized:
         return None
-    for folder, entry in _scan(library):
+    for entry_bib, entry in _scan(library):
         if _normalized_title(_value(entry, "title")) == normalized:
-            return folder
+            return entry_bib
     return None
 
 
 def normalize_library() -> None:
     library = Path(load_config()["library"])
-    for folder in sorted(library.glob("*")):
-        entry_bib = folder / "entry.bib"
-        if not entry_bib.is_file():
-            continue
+    for entry_bib in sorted(_bib_dir(library).glob("*.bib")):
         try:
             entry = _entries(entry_bib.read_text(encoding="utf-8"))[0]
         except StoreError:
@@ -201,21 +222,26 @@ def normalize_library() -> None:
         wanted = make_bibkey(
             first_author_lastname(_value(entry, "author")), _value(entry, "year")
         )
-        if wanted == folder.name:
+        if wanted == entry_bib.stem:
             continue
         target = _unique_key(library, wanted)
         entry.key = target
-        entry_bib.write_text(write_string(Library([entry])), encoding="utf-8")
-        shutil.move(folder, library / target)
+        _bib_path(library, target).write_text(
+            write_string(Library([entry])), encoding="utf-8"
+        )
+        old_pdf = _pdf_path(library, entry_bib.stem)
+        if old_pdf.is_file():
+            shutil.move(old_pdf, _pdf_path(library, target))
+        entry_bib.unlink()
 
 
-def _skipped_paper(folder: Path) -> StoredPaper:
-    entry = _entries((folder / "entry.bib").read_text(encoding="utf-8"))[0]
-    pdf = folder / "paper.pdf"
+def _skipped_paper(entry_bib: Path) -> StoredPaper:
+    entry = _entries(entry_bib.read_text(encoding="utf-8"))[0]
+    pdf = _pdf_path(entry_bib.parent.parent, entry.key)
     return {
         "key": entry.key,
         "title": _value(entry, "title"),
-        "folder": str(folder),
+        "folder": str(entry_bib.parent.parent),
         "pdf": str(pdf) if pdf.is_file() else None,
         "status": "skipped",
         "existing_key": entry.key,
@@ -247,25 +273,24 @@ def _store_entry(
             first_author_lastname(_value(entry, "author")), _value(entry, "year")
         ),
     )
-    folder = library / key
-    folder.mkdir(parents=True, exist_ok=False)
-
     entry.key = key
     if doi and not entry.get("url"):
         entry.set_field(Field("url", _doi_url(doi)))
-    (folder / "entry.bib").write_text(write_string(Library([entry])), encoding="utf-8")
+    _bib_dir(library).mkdir(parents=True, exist_ok=True)
+    entry_bib = _bib_path(library, key)
+    entry_bib.write_text(write_string(Library([entry])), encoding="utf-8")
 
     stored_pdf = link_pdf(key, pdf_path) if pdf_path else None
 
     if doi:
-        index.by_doi[doi] = folder
+        index.by_doi[doi] = entry_bib
     if title:
-        index.by_title[title] = folder
+        index.by_title[title] = entry_bib
 
     return {
         "key": key,
         "title": _value(entry, "title"),
-        "folder": str(folder),
+        "folder": str(library),
         "pdf": stored_pdf,
         "status": "added",
         "existing_key": None,
@@ -297,15 +322,30 @@ def store_papers(bib_text: str, pdf_path: str | None = None) -> list[StoredPaper
 
 
 def link_pdf(key: str, pdf_path: str) -> str:
-    folder, entry = _entry_and_folder(key)
+    entry_bib, entry = _entry_and_bib(key)
     src = Path(pdf_path).expanduser()
     if not src.is_file():
         raise StoreError(f"PDF not found: {src}")
-    shutil.copy2(src, folder / "paper.pdf")
+    library = entry_bib.parent.parent
+    target = _pdf_path(library, key)
+    _pdf_dir(library).mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, target)
     if not entry.get("file"):
-        entry.set_field(Field("file", ":paper.pdf:PDF"))
-    (folder / "entry.bib").write_text(write_string(Library([entry])), encoding="utf-8")
-    return str(folder / "paper.pdf")
+        entry.set_field(Field("file", f":pdf/{key}.pdf:PDF"))
+    entry_bib.write_text(write_string(Library([entry])), encoding="utf-8")
+    return str(target)
+
+
+def set_doi(key: str, doi: str) -> None:
+    entry_bib, entry = _entry_and_bib(key)
+    doi = _normalize_doi(doi)
+    if not doi:
+        return
+    if not entry.get("doi"):
+        entry.set_field(Field("doi", doi))
+    if not entry.get("url"):
+        entry.set_field(Field("url", _doi_url(doi)))
+    entry_bib.write_text(write_string(Library([entry])), encoding="utf-8")
 
 
 def _paper(entry_bib: Path) -> Paper:
@@ -316,15 +356,16 @@ def _paper(entry_bib: Path) -> Paper:
         "authors": _value(entry, "author"),
         "title": _value(entry, "title"),
         "url": _value(entry, "url"),
-        "doi": _value(entry, "doi"),
-        "has_pdf": (entry_bib.parent / "paper.pdf").is_file(),
-        "folder": str(entry_bib.parent),
+        "doi": _normalize_doi(_value(entry, "doi")),
+        "has_pdf": _pdf_path(entry_bib.parent.parent, entry.key).is_file(),
+        "folder": str(entry_bib.parent.parent),
         "categories": _value(entry, "category"),
     }
 
 
 def paper_from_result(result: StoredPaper) -> Paper:
-    return _paper(Path(result["folder"]) / "entry.bib")
+    library = Path(result["folder"])
+    return _paper(_bib_path(library, result["key"]))
 
 
 def list_papers(category: str | None = None) -> list[Paper]:
@@ -332,7 +373,7 @@ def list_papers(category: str | None = None) -> list[Paper]:
     normalize_library()
     wanted = category.lower() if category else None
     papers: list[Paper] = []
-    for entry_bib in sorted(library.glob("*/entry.bib")):
+    for entry_bib in sorted(_bib_dir(library).glob("*.bib")):
         try:
             paper = _paper(entry_bib)
         except StoreError:
@@ -347,50 +388,40 @@ def get_paper(key: str) -> Paper | None:
     return next((paper for paper in list_papers() if paper["key"] == key), None)
 
 
-def _entry_and_folder(key: str) -> tuple[Path, Entry]:
+def _entry_and_bib(key: str) -> tuple[Path, Entry]:
     library = Path(load_config()["library"])
-    direct = library / key
-    if (direct / "entry.bib").is_file():
+    direct = _bib_path(library, key)
+    if direct.is_file():
         try:
-            entry = _entries((direct / "entry.bib").read_text(encoding="utf-8"))[0]
+            entry = _entries(direct.read_text(encoding="utf-8"))[0]
             if entry.key == key:
                 return direct, entry
         except StoreError:
             pass
-    for folder, entry in _scan(library):
+    for entry_bib, entry in _scan(library):
         if entry.key == key:
-            return folder, entry
+            return entry_bib, entry
     raise StoreError(f"No paper with key '{key}'.")
 
 
 def categories(key: str) -> set[str]:
-    _, entry = _entry_and_folder(key)
+    _, entry = _entry_and_bib(key)
     return _keywords(entry)
 
 
 def set_categories(key: str, value: set[str]) -> None:
-    folder, entry = _entry_and_folder(key)
+    entry_bib, entry = _entry_and_bib(key)
     entry.fields = [field for field in entry.fields if field.key != "category"]
     if value:
         entry.set_field(Field("category", _keywords_text(value)))
-    (folder / "entry.bib").write_text(write_string(Library([entry])), encoding="utf-8")
+    entry_bib.write_text(write_string(Library([entry])), encoding="utf-8")
 
 
-def toggle_category(key: str, category: str) -> bool:
-    current = categories(key)
-    if category in current:
-        set_categories(key, current - {category})
-        return False
-    set_categories(key, current | {category})
-    return True
-
-
-def list_categories() -> list[tuple[str, int]]:
-    counts: dict[str, int] = {}
-    for paper in list_papers():
-        for category in _split_keywords(paper["categories"]):
-            counts[category] = counts.get(category, 0) + 1
-    return sorted(counts.items())
+def search_index(category: str | None = None) -> list[str]:
+    return [
+        f"{paper['key']}\t{paper['year']} {paper['title']} — {paper['authors']}"
+        for paper in list_papers(category)
+    ]
 
 
 def clean_library(keep_categories: set[str] | None = None) -> CleanReport:
@@ -400,7 +431,7 @@ def clean_library(keep_categories: set[str] | None = None) -> CleanReport:
     kept = 0
     seen_dois: set[str] = set()
     seen_titles: set[str] = set()
-    for folder, entry in sorted(_scan(library), key=lambda item: item[0].name):
+    for entry_bib, entry in _scan(library):
         doi = _doi(entry)
         title = _normalized_title(_value(entry, "title"))
         duplicate_of = None
@@ -409,8 +440,9 @@ def clean_library(keep_categories: set[str] | None = None) -> CleanReport:
         elif title and title in seen_titles:
             duplicate_of = "title"
         if duplicate_of is not None:
-            removed.append((folder.name, duplicate_of))
-            shutil.rmtree(folder)
+            removed.append((entry_bib.stem, duplicate_of))
+            entry_bib.unlink()
+            _pdf_path(library, entry_bib.stem).unlink(missing_ok=True)
             continue
         if doi:
             seen_dois.add(doi)
@@ -422,19 +454,10 @@ def clean_library(keep_categories: set[str] | None = None) -> CleanReport:
         ]
         if user_cats:
             entry.set_field(Field("category", _keywords_text(user_cats)))
-        entry.key = folder.name
-        (folder / "entry.bib").write_text(
-            write_string(Library([entry])), encoding="utf-8"
-        )
+        entry.key = entry_bib.stem
+        entry_bib.write_text(write_string(Library([entry])), encoding="utf-8")
         kept += 1
     return {"removed": removed, "kept": kept}
-
-
-def search_index(category: str | None = None) -> list[str]:
-    return [
-        f"{paper['key']}\t{paper['year']} {paper['authors']} — {paper['title']}"
-        for paper in list_papers(category)
-    ]
 
 
 def resolve_paper_url(paper: Paper) -> str:

@@ -18,6 +18,7 @@ class Config(TypedDict):
     downloads_dir: str
     pdf_priority: list[str]
     handoff_mode: str
+    libkey_library_id: str
 
 
 DEFAULTS: Config = {
@@ -27,6 +28,7 @@ DEFAULTS: Config = {
     "downloads_dir": str(HOME / "Downloads"),
     "pdf_priority": ["ieee", "semanticscholar", "unpaywall", "crossref", "arxiv"],
     "handoff_mode": "assisted",
+    "libkey_library_id": "",
 }
 
 
@@ -58,6 +60,12 @@ def load_config() -> Config:
 
 
 def user_agent() -> dict[str, str]:
+    from . import __version__
+
     email = str(load_config()["unpaywall_email"])
-    agent = f"Cocotero/0.1 (mailto:{email})" if email else "Cocotero/0.1"
+    agent = (
+        f"Cocotero/{__version__} (mailto:{email})"
+        if email
+        else f"Cocotero/{__version__}"
+    )
     return {"User-Agent": agent}

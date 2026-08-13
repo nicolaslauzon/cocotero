@@ -50,17 +50,16 @@ def test_first_author_lastname():
 
 def test_store_paper_plain_docs(library):
     result = store.store_paper(BIB)
-    folder = library / result["key"]
+    bib = library / "bib" / f"{result['key']}.bib"
     assert result["key"] == "vaswani2017"
-    assert folder.is_dir()
-    assert (folder / "entry.bib").is_file()
+    assert bib.is_file()
     assert not result["pdf"]
-    assert (folder / "entry.bib").read_text().startswith("@article{vaswani2017,")
+    assert bib.read_text().startswith("@article{vaswani2017,")
 
 
 def test_store_paper_injects_url(library):
     result = store.store_paper(BIB)
-    text = (library / result["key"] / "entry.bib").read_text()
+    text = (library / "bib" / f"{result['key']}.bib").read_text()
     assert "url = {https://doi.org/10.48550/arxiv.1706.03762}" in text
 
 
@@ -68,9 +67,9 @@ def test_store_paper_with_pdf(library):
     pdf = library / "paper.pdf"
     pdf.write_bytes(b"%PDF-1.4 test")
     result = store.store_paper(BIB, pdf_path=str(pdf))
-    assert result["pdf"] == str(library / result["key"] / "paper.pdf")
-    text = (library / result["key"] / "entry.bib").read_text()
-    assert "file = {:paper.pdf:PDF}" in text
+    assert result["pdf"] == str(library / "pdf" / "vaswani2017.pdf")
+    text = (library / "bib" / f"{result['key']}.bib").read_text()
+    assert "file = {:pdf/vaswani2017.pdf:PDF}" in text
 
 
 def test_store_paper_duplicate_doi(library):
@@ -78,7 +77,7 @@ def test_store_paper_duplicate_doi(library):
     second = store.store_paper(BIB.replace("vaswani2017attention", "copy2017"))
     assert second["status"] == "skipped"
     assert second["existing_key"] == "vaswani2017"
-    assert len(list(library.glob("*/entry.bib"))) == 1
+    assert len(list((library / "bib").glob("*.bib"))) == 1
 
 
 def test_store_paper_duplicate_title_without_doi(library):
@@ -105,7 +104,7 @@ def test_store_paper_same_title_different_doi_not_duplicate(library):
 def test_store_papers_batch(library):
     results = store.store_papers(BATCH)
     assert [r["status"] for r in results] == ["added", "added"]
-    assert len(list(library.glob("*/entry.bib"))) == 2
+    assert len(list((library / "bib").glob("*.bib"))) == 2
 
 
 def test_store_papers_batch_skips_duplicates(library):
@@ -115,7 +114,7 @@ def test_store_papers_batch_skips_duplicates(library):
     )
     results = store.store_papers(BATCH + "\n" + dup)
     assert [r["status"] for r in results] == ["added", "added", "skipped"]
-    assert len(list(library.glob("*/entry.bib"))) == 2
+    assert len(list((library / "bib").glob("*.bib"))) == 2
 
 
 def test_store_papers_bad_bibtex(library):
@@ -131,7 +130,7 @@ def test_store_papers_recovers_after_broken_entry(library):
     )
     results = store.store_papers(text)
     assert [r["key"] for r in results] == ["vaswani2017", "brossard2020"]
-    assert len(list(library.glob("*/entry.bib"))) == 2
+    assert len(list((library / "bib").glob("*.bib"))) == 2
 
 
 def test_store_papers_broken_only_returns_empty(library):
@@ -155,10 +154,10 @@ def test_store_paper_bad_bibtex(library):
 def test_store_paper_rewrites_key(library):
     result = store.store_paper(BIB.replace("vaswani2017attention", "Brossard2020"))
     assert result["key"] == "vaswani2017"
-    assert (library / "vaswani2017").is_dir()
-    assert not (library / "Brossard2020").exists()
+    assert (library / "bib" / "vaswani2017.bib").is_file()
+    assert not (library / "bib" / "Brossard2020.bib").exists()
     assert (
-        (library / "vaswani2017" / "entry.bib")
+        (library / "bib" / "vaswani2017.bib")
         .read_text()
         .startswith("@article{vaswani2017,")
     )
@@ -167,7 +166,7 @@ def test_store_paper_rewrites_key(library):
 def test_store_paper_sanitizes_escape_codes(library):
     dirty = "@article{Brossard2020,\n\t\x1bE   author = {Martin Brossard and Silvere Bonnabel},\n\t\x1bE   doi = {10.1109/LRA.2020.3003256},\n\t\x1bE   year = {2020}\n}"
     result = store.store_paper(dirty)
-    text = (library / result["key"] / "entry.bib").read_text()
+    text = (library / "bib" / f"{result['key']}.bib").read_text()
     assert result["key"] == "brossard2020"
     assert "\x1b" not in text
     assert "author = {Martin Brossard and Silvere Bonnabel}" in text
@@ -176,14 +175,14 @@ def test_store_paper_sanitizes_escape_codes(library):
 
 def test_normalize_library_renames_old_keys(library):
     brossard = "@article{Brossard2020, author={Brossard, Martin}, year={2020}, title={Denoising IMU}}"
-    old = library / "Brossard2020"
-    old.mkdir()
-    (old / "entry.bib").write_text(brossard)
+    (library / "bib").mkdir()
+    old = library / "bib" / "Brossard2020.bib"
+    old.write_text(brossard)
     store.normalize_library()
-    assert not (library / "Brossard2020").exists()
-    renamed = library / "brossard2020"
-    assert renamed.is_dir()
-    assert (renamed / "entry.bib").read_text().startswith("@article{brossard2020,")
+    assert not (library / "bib" / "Brossard2020.bib").exists()
+    renamed = library / "bib" / "brossard2020.bib"
+    assert renamed.is_file()
+    assert renamed.read_text().startswith("@article{brossard2020,")
 
 
 def test_list_papers(library):
@@ -208,7 +207,7 @@ def test_search_index(library):
     lines = store.search_index()
     assert len(lines) == 1
     assert lines[0].startswith(
-        "vaswani2017\t2017 Vaswani, Ashish and Shazeer, Noam and Parmar, Niki — Attention is All You Need"
+        "vaswani2017\t2017 Attention is All You Need — Vaswani, Ashish and Shazeer, Noam and Parmar, Niki"
     )
 
 
@@ -236,24 +235,37 @@ def test_resolve_paper_url_missing(library):
         store.resolve_paper_url(store.get_paper("vaswani2017"))
 
 
+def test_normalize_doi_strips_url_prefix(library):
+    store.store_paper(
+        "@article{x, author={Vaswani, Ashish}, year={2017}, title={T}, "
+        "doi={https://doi.org/10.1109/LRA.2020.3003256}}"
+    )
+    paper = store.get_paper("vaswani2017")
+    assert paper["doi"] == "10.1109/lra.2020.3003256"
+    assert (
+        store._doi(store._entries((library / "bib" / "vaswani2017.bib").read_text())[0])
+        == "10.1109/lra.2020.3003256"
+    )
+
+
+def test_set_doi_injects_url(library):
+    store.store_paper("@article{x, author={Vaswani, Ashish}, year={2017}, title={T}}")
+    store.set_doi("vaswani2017", "https://dx.doi.org/10.1109/ICORR.2011.5975346")
+    paper = store.get_paper("vaswani2017")
+    assert paper["doi"] == "10.1109/icorr.2011.5975346"
+    assert paper["url"] == "https://doi.org/10.1109/icorr.2011.5975346"
+
+
 def test_categories_roundtrip(library):
     result = store.store_paper(BIB)
     assert store.categories(result["key"]) == set()
     store.set_categories(result["key"], {"imu", "deep-learning"})
     assert store.categories(result["key"]) == {"imu", "deep-learning"}
-    text = (library / result["key"] / "entry.bib").read_text()
+    text = (library / "bib" / f"{result['key']}.bib").read_text()
     assert "category = {deep-learning, imu}" in text
     store.set_categories(result["key"], set())
     assert store.categories(result["key"]) == set()
-    assert "category" not in (library / result["key"] / "entry.bib").read_text()
-
-
-def test_toggle_category(library):
-    result = store.store_paper(BIB)
-    assert store.toggle_category(result["key"], "imu") is True
-    assert store.categories(result["key"]) == {"imu"}
-    assert store.toggle_category(result["key"], "imu") is False
-    assert store.categories(result["key"]) == set()
+    assert "category" not in (library / "bib" / f"{result['key']}.bib").read_text()
 
 
 def test_list_papers_filter_by_category(library):
@@ -261,12 +273,6 @@ def test_list_papers_filter_by_category(library):
     store.set_categories("vaswani2017", {"transformers"})
     assert len(store.list_papers(category="transformers")) == 1
     assert store.list_papers(category="imu") == []
-
-
-def test_list_categories_counts(library):
-    store.store_paper(BIB)
-    store.set_categories("vaswani2017", {"attention", "transformers"})
-    assert sorted(store.list_categories()) == [("attention", 1), ("transformers", 1)]
 
 
 def test_get_paper_includes_categories(library):
@@ -281,28 +287,23 @@ def test_store_paper_drops_bibliographic_keywords(library):
         "title={Attention is All You Need}, keywords={transformer, nlp}",
     )
     store.store_paper(bib)
-    text = (library / "vaswani2017" / "entry.bib").read_text()
+    text = (library / "bib" / "vaswani2017.bib").read_text()
     assert "keywords" not in text
     assert store.categories("vaswani2017") == set()
 
 
 def test_clean_library_dedup_and_migrate(library):
-    kept = library / "vaswani2017"
-    kept.mkdir()
-    (kept / "entry.bib").write_text(
-        BIB.replace("}\n}", "},\n  keywords = {dubois2026, robot}\n}")
-    )
-    dup = library / "vaswani2017-2"
-    dup.mkdir()
-    (dup / "entry.bib").write_text(
-        BIB.replace("10.48550/arxiv.1706.03762", "10.9999/different")
-    )
+    (library / "bib").mkdir()
+    kept = library / "bib" / "vaswani2017.bib"
+    kept.write_text(BIB.replace("}\n}", "},\n  keywords = {dubois2026, robot}\n}"))
+    dup = library / "bib" / "vaswani2017-2.bib"
+    dup.write_text(BIB.replace("10.48550/arxiv.1706.03762", "10.9999/different"))
     report = store.clean_library(keep_categories={"dubois2026"})
     assert report["removed"] == [("vaswani2017-2", "title")]
     assert report["kept"] == 1
-    folders = list(library.glob("*/entry.bib"))
-    assert len(folders) == 1
-    text = (kept / "entry.bib").read_text()
+    bibs = list((library / "bib").glob("*.bib"))
+    assert len(bibs) == 1
+    text = kept.read_text()
     assert "keywords" not in text
     assert "category = {dubois2026}" in text
 

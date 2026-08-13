@@ -92,26 +92,39 @@ def _isolated_library(tmp_path, monkeypatch):
     monkeypatch.setenv("COCOTERO_CONFIG", str(tmp_path / "config.toml"))
 
 
-def test_cmd_cat_toggle(tmp_path, monkeypatch):
+def test_cmd_browse_cluster_picks_within_cluster(tmp_path, monkeypatch):
     _isolated_library(tmp_path, monkeypatch)
     store.store_paper(
         "@article{x, author={Vaswani, Ashish}, year={2017}, title={T}, doi={10.1/x}}"
     )
-    args = argparse.Namespace(key="vaswani2017", cat="imu")
-    cli.cmd_cat(args)
-    assert store.categories("vaswani2017") == {"imu"}
-    cli.cmd_cat(args)
-    assert store.categories("vaswani2017") == set()
+    store.set_categories("vaswani2017", {"imu"})
+    picked = []
+    monkeypatch.setattr(
+        cli,
+        "_fzf_pick_paper",
+        lambda category=None: picked.append(category) or "vaswani2017",
+    )
+    monkeypatch.setattr(cli, "_open_paper_url", lambda key: None)
+    cli.cmd_browse_cluster(argparse.Namespace(cluster="imu"))
+    assert picked == ["imu"]
 
 
-def test_cmd_cat_shows_tags(tmp_path, monkeypatch):
+def test_cmd_cite_prints_bibtex(tmp_path, monkeypatch, capsys):
     _isolated_library(tmp_path, monkeypatch)
     store.store_paper(
         "@article{x, author={Vaswani, Ashish}, year={2017}, title={T}, doi={10.1/x}}"
     )
-    store.set_categories("vaswani2017", {"imu", "slam"})
-    cli.cmd_cat(argparse.Namespace(key="vaswani2017", cat=None))
-    assert store.categories("vaswani2017") == {"imu", "slam"}
+    cli.cmd_cite(argparse.Namespace(key="vaswani2017"))
+    assert "@article{vaswani2017," in capsys.readouterr().out
+
+
+def test_cmd_cite_unknown_key_exits(tmp_path, monkeypatch, capsys):
+    _isolated_library(tmp_path, monkeypatch)
+    try:
+        cli.cmd_cite(argparse.Namespace(key="missing"))
+    except SystemExit as exc:
+        assert exc.code == 1
+    assert "No paper with key 'missing'" in capsys.readouterr().out
 
 
 def test_cmd_cluster_tags_all_papers(tmp_path, monkeypatch):
@@ -133,21 +146,20 @@ def test_cmd_cluster_tags_all_papers(tmp_path, monkeypatch):
 
 def test_cmd_clean_dedup(tmp_path, monkeypatch):
     _isolated_library(tmp_path, monkeypatch)
-    kept = tmp_path / "vaswani2017"
-    kept.mkdir()
-    (kept / "entry.bib").write_text(
+    (tmp_path / "bib").mkdir()
+    kept = tmp_path / "bib" / "vaswani2017.bib"
+    kept.write_text(
         "@article{x, author={Vaswani, Ashish}, year={2017}, title={T}, "
         "doi={10.1/x}, keywords={dubois2026, robot}}"
     )
-    dup = tmp_path / "vaswani2017-2"
-    dup.mkdir()
-    (dup / "entry.bib").write_text(
+    dup = tmp_path / "bib" / "vaswani2017-2.bib"
+    dup.write_text(
         "@article{x, author={Vaswani, Ashish}, year={2017}, title={T}, doi={10.1/x}}"
     )
     cli.cmd_clean(argparse.Namespace(keep=[]))
-    folders = list(tmp_path.glob("*/entry.bib"))
-    assert len(folders) == 1
-    text = (kept / "entry.bib").read_text()
+    bibs = list((tmp_path / "bib").glob("*.bib"))
+    assert len(bibs) == 1
+    text = kept.read_text()
     assert "category = {dubois2026}" in text
     assert "keywords" not in text
 
@@ -160,10 +172,10 @@ def test_cmd_pdf_links_local_file(tmp_path, monkeypatch):
     pdf = tmp_path / "manual.pdf"
     pdf.write_bytes(b"%PDF-1.4 manual")
     cli.cmd_pdf(argparse.Namespace(key="vaswani2017", path=str(pdf)))
-    assert (tmp_path / "vaswani2017" / "paper.pdf").is_file()
+    assert (tmp_path / "pdf" / "vaswani2017.pdf").is_file()
     assert (
-        "file = {:paper.pdf:PDF}"
-        in (tmp_path / "vaswani2017" / "entry.bib").read_text()
+        "file = {:pdf/vaswani2017.pdf:PDF}"
+        in (tmp_path / "bib" / "vaswani2017.bib").read_text()
     )
 
 
@@ -180,7 +192,7 @@ def test_cmd_pdf_retry_one(monkeypatch, tmp_path):
 
     monkeypatch.setattr(cli, "download_pdf", fake_download)
     cli.cmd_pdf(argparse.Namespace(key="vaswani2017", path=None))
-    assert calls == [("vaswani2017", True)]
+    assert calls == [("vaswani2017", False)]
 
 
 def test_cmd_pdf_retry_all(monkeypatch, tmp_path):
@@ -200,3 +212,33 @@ def test_cmd_pdf_retry_all(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "download_pdf", fake_download)
     cli.cmd_pdf(argparse.Namespace(key=None, path=None))
     assert sorted(calls) == ["brossard2020", "vaswani2017"]
+
+
+def test_cmd_pdf_retry_all_handoffs_paywalled(tmp_path, monkeypatch):
+    _isolated_library(tmp_path, monkeypatch)
+    store.store_paper(
+        "@article{x, author={Vaswani, Ashish}, year={2017}, title={T}, doi={10.1109/1}}"
+    )
+    (tmp_path / "config.toml").write_text(
+        f'library = "{tmp_path}"\n'
+        'unpaywall_email = ""\n'
+        'proxy_prefix = "https://ezproxy.ulaval.ca/login?url="\n'
+        'downloads_dir = "~/Downloads"\n'
+        'handoff_mode = "assisted"\n'
+        'pdf_priority = ["arxiv"]\n'
+    )
+    monkeypatch.setattr(
+        cli,
+        "download_pdf",
+        lambda paper, interactive=False: {"source": None, "pdf": None},
+    )
+    handed = []
+    monkeypatch.setattr(
+        cli,
+        "handoff_paywalled",
+        lambda papers, cfg, mode: (
+            handed.append(([paper["key"] for paper in papers], mode)) or (0, {})
+        ),
+    )
+    cli.cmd_pdf(argparse.Namespace(key=None, path=None, handoff="auto"))
+    assert handed == [(["vaswani2017"], "auto")]

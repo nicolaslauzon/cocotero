@@ -10,9 +10,16 @@ from typing import TypedDict
 
 import requests
 from rich.console import Console
+from rich.progress import Progress
 
 from .config import Config, load_config, user_agent
-from .store import Paper, StoreError, link_pdf
+from .store import (
+    Paper,
+    StoreError,
+    _normalized_title,
+    link_pdf,
+    set_doi,
+)
 from .ui import fzf_select, open_in_browser
 
 console = Console()
@@ -29,6 +36,7 @@ _INSTITUTIONAL_PREFIXES = (
     "10.1109",
     "10.1016",
     "10.1007",
+    "10.1002",
     "10.1145",
     "10.1038",
     "10.1021",
@@ -244,12 +252,15 @@ def _ezproxy_handoff(paper: Paper, cfg: Config) -> str | None:
     return None
 
 
-def handoff_paywalled(papers: list[Paper], cfg: Config, mode: str) -> int:
+def handoff_paywalled(
+    papers: list[Paper], cfg: Config, mode: str
+) -> tuple[int, dict[str, str]]:
     linked = 0
+    failures: dict[str, str] = {}
     if mode == "auto":
         from . import ezproxy
 
-        results = ezproxy.fetch_pdfs(papers)
+        results, reasons = ezproxy.fetch_pdfs(papers)
         for paper in papers:
             temp = results.get(paper["key"])
             if not temp:
@@ -262,20 +273,62 @@ def handoff_paywalled(papers: list[Paper], cfg: Config, mode: str) -> int:
                 pass
             finally:
                 Path(temp).unlink(missing_ok=True)
-        return linked
-    for paper in papers:
-        try:
-            stored = _ezproxy_handoff(paper, cfg)
-        except (StoreError, OSError):
+        failures = {
+            key: reason for key, reason in reasons.items() if not results.get(key)
+        }
+        return linked, failures
+    with Progress(console=console) as progress:
+        task = progress.add_task("Handing off paywalled papers", total=len(papers))
+        for paper in papers:
+            try:
+                stored = _ezproxy_handoff(paper, cfg)
+            except (StoreError, OSError) as exc:
+                failures[paper["key"]] = type(exc).__name__
+                stored = None
+            if stored:
+                linked += 1
+                console.print(f"[green]{paper['key']}[/green] — PDF via ezproxy")
+            else:
+                failures.setdefault(paper["key"], "no download detected")
+            progress.advance(task)
+    return linked, failures
+
+
+def _resolve_doi_by_title(paper: Paper) -> str | None:
+    title = paper["title"].strip()
+    if not title:
+        return None
+    try:
+        response = requests.get(
+            "https://api.crossref.org/works",
+            params={"query.bibliographic": title, "rows": 5},
+            headers=user_agent(),
+            timeout=15,
+        )
+        response.raise_for_status()
+        items = response.json()["message"]["items"]
+    except (requests.RequestException, KeyError, ValueError):
+        return None
+    normalized = _normalized_title(title)
+    for item in items:
+        candidates = item.get("title") or []
+        if not candidates:
             continue
-        if stored:
-            linked += 1
-            console.print(f"[green]{paper['key']}[/green] — PDF via ezproxy")
-    return linked
+        if _normalized_title(str(candidates[0])) == normalized:
+            return str(item.get("DOI", ""))
+    return None
 
 
 def download_pdf(paper: Paper, interactive: bool = False) -> DownloadResult:
     cfg = load_config()
+    if not paper["doi"]:
+        resolved = _resolve_doi_by_title(paper)
+        if resolved:
+            paper["doi"] = resolved
+            try:
+                set_doi(paper["key"], resolved)
+            except StoreError:
+                pass
     for source, url in _discover_urls(paper, cfg):
         temp: Path | None = None
         try:

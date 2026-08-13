@@ -1,13 +1,11 @@
 import argparse
 import re
 import select
-import shutil
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from rich.console import Console
-from rich.table import Table
 
 from .citations import (
     CrossrefError,
@@ -23,14 +21,12 @@ from .store import (
     clean_library,
     get_paper,
     link_pdf,
-    list_categories,
     list_papers,
     paper_from_result,
     resolve_paper_url,
     search_index,
     set_categories,
     store_papers,
-    toggle_category,
 )
 from .ui import fzf_select, open_in_browser
 
@@ -193,8 +189,18 @@ def _download_for(results: list[dict], interactive: bool, handoff_mode: str) -> 
     paywalled = [paper for paper in paywalled if _should_handoff(paper, cfg)]
     if paywalled:
         console.print(f"[dim]Handing off {len(paywalled)} paywalled paper(s)…[/dim]")
-        pdf_count += handoff_paywalled(paywalled, cfg, handoff_mode)
+        linked, failures = handoff_paywalled(paywalled, cfg, handoff_mode)
+        pdf_count += linked
+        _report_failures(failures)
     return pdf_count
+
+
+def _report_failures(failures: dict[str, str]) -> None:
+    if not failures:
+        return
+    console.print("[dim]Not fetched via EZproxy:[/dim]")
+    for key, reason in failures.items():
+        console.print(f"[dim]  {key} — {reason}[/dim]")
 
 
 def cmd_add(args: argparse.Namespace) -> None:
@@ -224,76 +230,15 @@ def cmd_add(args: argparse.Namespace) -> None:
     pdf_count = _download_for(results, interactive, handoff_mode)
     if len(results) == 1 and results[0]["status"] == "added":
         result = results[0]
-        pdf_file = Path(result["folder"]) / "paper.pdf"
-        console.print(f"  entry.bib: {result['folder']}/entry.bib")
-        console.print(
-            f"  paper.pdf: {'stored' if pdf_file.is_file() else 'not stored'}"
-        )
+        pdf_file = Path(result["folder"]) / "pdf" / f"{result['key']}.pdf"
+        console.print(f"  bib: {result['folder']}/bib/{result['key']}.bib")
+        console.print(f"  pdf: {'stored' if pdf_file.is_file() else 'not stored'}")
     elif len(results) > 1:
         added = sum(1 for result in results if result["status"] == "added")
         skipped = len(results) - added
         console.print(
             f"[dim]Added {added}, skipped {skipped}, {pdf_count} PDF(s) downloaded.[/dim]"
         )
-
-
-def cmd_list(args: argparse.Namespace) -> None:
-    papers = list_papers(category=args.cat)
-    if not papers:
-        if args.cat:
-            console.print(f"No papers in category '{args.cat}'.")
-        else:
-            console.print("Library is empty. Add a paper with `cocotero add`.")
-        return
-    table = Table(show_header=True, header_style="bold")
-    table.add_column("Key", style="cyan")
-    table.add_column("Year")
-    table.add_column("Authors")
-    table.add_column("Title")
-    table.add_column("Categories")
-    table.add_column("PDF")
-    for paper in papers:
-        table.add_row(
-            paper["key"],
-            paper["year"],
-            paper["authors"],
-            paper["title"],
-            paper["categories"] or "—",
-            "yes" if paper["has_pdf"] else "no",
-        )
-    console.print(table)
-
-
-def cmd_cat(args: argparse.Namespace) -> None:
-    try:
-        if args.cat:
-            added = toggle_category(args.key, args.cat)
-            verb = "Added" if added else "Removed"
-            console.print(
-                f"[green]{verb}[/green] tag '{args.cat}' [bold]{args.key}[/bold]."
-            )
-        else:
-            tags = categories(args.key)
-            listing = ", ".join(sorted(tags)) if tags else "(none)"
-            console.print(f"Tags for [bold]{args.key}[/bold]: {listing}")
-    except StoreError as exc:
-        console.print(f"[red]{exc}[/red]")
-        raise SystemExit(1)
-
-
-def cmd_cats(_args: argparse.Namespace) -> None:
-    counts = list_categories()
-    if not counts:
-        console.print(
-            "No categories yet. Tag papers with `cocotero cat <key> <category>`."
-        )
-        return
-    table = Table(show_header=True, header_style="bold")
-    table.add_column("Category", style="cyan")
-    table.add_column("Papers")
-    for category, count in counts:
-        table.add_row(category, str(count))
-    console.print(table)
 
 
 def cmd_cluster(args: argparse.Namespace) -> None:
@@ -332,12 +277,13 @@ def cmd_cluster(args: argparse.Namespace) -> None:
     )
 
 
-def _retry_missing_pdfs() -> None:
+def _retry_missing_pdfs(handoff_mode: str) -> None:
     missing = [paper for paper in list_papers() if not paper["has_pdf"]]
     if not missing:
         console.print("All papers have a PDF.")
         return
     console.print(f"Retrying {len(missing)} paper(s) without a PDF…")
+    paywalled: list = []
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {pool.submit(download_pdf, paper): paper for paper in missing}
         for future in as_completed(futures):
@@ -349,10 +295,33 @@ def _retry_missing_pdfs() -> None:
                 )
             else:
                 console.print(f"[dim]{paper['key']} — not found[/dim]")
+                paywalled.append(paper)
+    cfg = load_config()
+    paywalled = [paper for paper in paywalled if _should_handoff(paper, cfg)]
+    failures: dict[str, str] = {}
+    if paywalled:
+        console.print(f"[dim]Handing off {len(paywalled)} paywalled paper(s)…[/dim]")
+        _, failures = handoff_paywalled(paywalled, cfg, handoff_mode)
+    still_missing = [paper for paper in list_papers() if not paper["has_pdf"]]
+    downloaded = len(missing) - len(still_missing)
+    console.print(
+        f"[dim]Done: {downloaded} PDF(s) downloaded, {len(still_missing)} still missing.[/dim]"
+    )
+    if failures:
+        console.print("[dim]EZproxy failures:[/dim]")
+        for key, reason in failures.items():
+            console.print(f"[dim]  {key} — {reason}[/dim]")
+    no_oa = [paper for paper in still_missing if paper["key"] not in failures]
+    if no_oa:
+        console.print(
+            f"[dim]  …and {len(no_oa)} paper(s) with no open-access copy.[/dim]"
+        )
 
 
 def cmd_pdf(args: argparse.Namespace) -> None:
     try:
+        cfg = load_config()
+        handoff_mode = getattr(args, "handoff", None) or cfg["handoff_mode"]
         if args.path:
             stored = link_pdf(args.key, args.path)
             console.print(f"[green]Linked[/green] [bold]{args.key}[/bold] → {stored}")
@@ -365,15 +334,18 @@ def cmd_pdf(args: argparse.Namespace) -> None:
             if paper["has_pdf"]:
                 console.print(f"[yellow]{args.key}[/yellow] already has a PDF.")
                 return
-            outcome = download_pdf(paper, interactive=True)
+            outcome = download_pdf(paper, interactive=False)
             if outcome["pdf"]:
                 console.print(
                     f"[green]{args.key}[/green] — PDF via {outcome['source']}"
                 )
-            else:
-                console.print(f"[yellow]{args.key}[/yellow] — not found (paywalled).")
+                return
+            if _should_handoff(paper, cfg):
+                handoff_paywalled([paper], cfg, handoff_mode)
+                return
+            console.print(f"[yellow]{args.key}[/yellow] — not found (paywalled).")
             return
-        _retry_missing_pdfs()
+        _retry_missing_pdfs(handoff_mode)
     except StoreError as exc:
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(1)
@@ -384,7 +356,9 @@ def cmd_rm(args: argparse.Namespace) -> None:
     if paper is None:
         console.print(f"[red]No paper with key '{args.key}'.[/red]")
         raise SystemExit(1)
-    shutil.rmtree(Path(paper["folder"]))
+    library = Path(paper["folder"])
+    (library / "bib" / f"{paper['key']}.bib").unlink(missing_ok=True)
+    (library / "pdf" / f"{paper['key']}.pdf").unlink(missing_ok=True)
     console.print(f"[green]Removed[/green] [bold]{args.key}[/bold].")
 
 
@@ -393,6 +367,11 @@ def _open_paper_url(key: str) -> None:
     if paper is None:
         console.print(f"[red]No paper with key '{key}'.[/red]")
         raise SystemExit(1)
+    if paper["has_pdf"]:
+        pdf = Path(paper["folder"]) / "pdf" / f"{paper['key']}.pdf"
+        console.print(f"Opening [cyan]{pdf}[/cyan]")
+        open_in_browser(str(pdf))
+        return
     try:
         url = resolve_paper_url(paper)
     except StoreError as exc:
@@ -412,8 +391,8 @@ def _fzf_pick_paper(category: str | None = None) -> str | None:
         raise SystemExit(1)
     library = Path(load_config()["library"])
     preview = (
-        f'cat "{library}"/{{1}}/entry.bib; '
-        f'echo; ls "{library}"/{{1}}/paper.pdf 2>/dev/null || echo "PDF: none"'
+        f'cat "{library}"/bib/{{1}}.bib; '
+        f'echo; ls "{library}"/pdf/{{1}}.pdf 2>/dev/null || echo "PDF: none"'
     )
     selected = fzf_select(lines, preview_cmd=preview)
     if selected is None:
@@ -422,9 +401,30 @@ def _fzf_pick_paper(category: str | None = None) -> str | None:
 
 
 def cmd_open(args: argparse.Namespace) -> None:
-    key = args.key or _fzf_pick_paper(category=args.cat)
+    key = args.key or _fzf_pick_paper()
     if key is not None:
         _open_paper_url(key)
+
+
+def cmd_browse_cluster(args: argparse.Namespace) -> None:
+    key = _fzf_pick_paper(category=args.cluster)
+    if key is not None:
+        _open_paper_url(key)
+
+
+def cmd_cite(args: argparse.Namespace) -> None:
+    key = args.key or _fzf_pick_paper()
+    if key is None:
+        return
+    paper = get_paper(key)
+    if paper is None:
+        console.print(f"[red]No paper with key '{key}'.[/red]")
+        raise SystemExit(1)
+    sys.stdout.write(
+        (Path(paper["folder"]) / "bib" / f"{paper['key']}.bib").read_text(
+            encoding="utf-8"
+        )
+    )
 
 
 def cmd_clean(args: argparse.Namespace) -> None:
@@ -476,28 +476,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add.set_defaults(func=cmd_add)
 
-    list_parser = sub.add_parser("list", help="List all papers.")
-    list_parser.add_argument("--cat", help="Only show papers with this category.")
-    list_parser.set_defaults(func=cmd_list)
     open_parser = sub.add_parser(
         "open", help="Open a paper in your browser. Without a key, pick via fzf."
     )
     open_parser.add_argument("key", nargs="?")
-    open_parser.add_argument(
-        "--cat", help="Only fuzzy-pick among papers with this category."
-    )
     open_parser.set_defaults(func=cmd_open)
 
-    cat_parser = sub.add_parser("cat", help="Show or toggle a category tag on a paper.")
-    cat_parser.add_argument("key")
-    cat_parser.add_argument(
-        "cat", nargs="?", help="Category to add/remove (omit to list tags)."
+    browse_parser = sub.add_parser(
+        "browse-cluster",
+        help="Fuzzy-pick and open a paper within one cluster (category).",
     )
-    cat_parser.set_defaults(func=cmd_cat)
+    browse_parser.add_argument("cluster")
+    browse_parser.set_defaults(func=cmd_browse_cluster)
 
-    sub.add_parser("cats", help="List categories with paper counts.").set_defaults(
-        func=cmd_cats
+    cite_parser = sub.add_parser(
+        "cite", help="Print the stored BibTeX entry for a paper."
     )
+    cite_parser.add_argument("key", nargs="?")
+    cite_parser.set_defaults(func=cmd_cite)
 
     cluster_parser = sub.add_parser(
         "cluster",
@@ -520,6 +516,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pdf_parser.add_argument(
         "path", nargs="?", help="Local PDF file to link to the given key."
+    )
+    pdf_parser.add_argument(
+        "--handoff",
+        choices=["assisted", "auto"],
+        help="Paywalled-paper strategy (default: config 'handoff_mode').",
     )
     pdf_parser.set_defaults(func=cmd_pdf)
 

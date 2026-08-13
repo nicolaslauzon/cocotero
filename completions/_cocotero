@@ -1,16 +1,20 @@
 #compdef cocotero
 
 _cocotero() {
-  local -a commands keys
-  commands=(add list open cat cats cluster pdf rm clean login)
+  local -a commands keys cats
+  commands=(add open browse-cluster cite cluster pdf rm clean login)
   if (( CURRENT == 2 )); then
     _describe 'command' commands
     return
   fi
   case "$words[2]" in
-    open|cat|pdf|rm)
-      keys=(${(f)"$(print -l "${COCOTERO_LIB:-$HOME/cocotero/library}"/*(/:t) 2>/dev/null)"})
+    open|pdf|rm|cite)
+      keys=(${(f)"$(print -l "${COCOTERO_LIB:-$HOME/cocotero/library}"/bib/*.bib(:r:t) 2>/dev/null)"})
       _describe 'key' keys
+      ;;
+    browse-cluster|cluster)
+      cats=(${(f)"$(grep -h '^category' "${COCOTERO_LIB:-$HOME/cocotero/library}"/bib/*.bib 2>/dev/null | sed 's/.*= {//; s/}.*//' | tr ',' ' ')"})
+      _describe 'cluster' cats
       ;;
   esac
 }
