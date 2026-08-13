@@ -3,7 +3,7 @@ from typing import TypedDict
 
 import requests
 
-from .config import load_config
+from .config import user_agent
 
 
 class CrossrefError(Exception):
@@ -15,18 +15,11 @@ class CrossrefHit(TypedDict):
     title: str
     authors: str
     year: str
-    container: str
 
 
 _API = "https://api.crossref.org/works"
 _ARXIV_API = "https://export.arxiv.org/api/query"
 _ATOM_NS = {"a": "http://www.w3.org/2005/Atom"}
-
-
-def _headers() -> dict[str, str]:
-    email = str(load_config()["unpaywall_email"])
-    user_agent = f"Cocotero/0.1 (mailto:{email})" if email else "Cocotero/0.1"
-    return {"User-Agent": user_agent}
 
 
 def _first_author(authors: list[object]) -> str:
@@ -51,24 +44,18 @@ def _year(issued: object) -> str:
 
 def _to_hit(item: dict[str, object]) -> CrossrefHit:
     title = str(item.get("title", [""])[0] if isinstance(item.get("title"), list) else item.get("title", ""))
-    container = str(
-        item.get("container-title", [""])[0]
-        if isinstance(item.get("container-title"), list)
-        else item.get("container-title", "")
-    )
     return {
         "doi": str(item.get("DOI", "")),
         "title": title,
         "authors": _first_author(item.get("author", []) if isinstance(item.get("author"), list) else []),
         "year": _year(item.get("issued")),
-        "container": container,
     }
 
 
 def search_by_title(title: str) -> list[CrossrefHit]:
     params = {"query.bibliographic": title, "rows": 8}
     try:
-        response = requests.get(_API, params=params, headers=_headers(), timeout=15)
+        response = requests.get(_API, params=params, headers=user_agent(), timeout=15)
         response.raise_for_status()
         items = response.json()["message"]["items"]
     except (requests.RequestException, KeyError, ValueError) as exc:
@@ -77,7 +64,7 @@ def search_by_title(title: str) -> list[CrossrefHit]:
 
 
 def fetch_bibtex(doi: str) -> str:
-    headers = {**_headers(), "Accept": "application/x-bibtex"}
+    headers = {**user_agent(), "Accept": "application/x-bibtex"}
     try:
         response = requests.get(f"https://doi.org/{doi}", headers=headers, timeout=15)
         response.raise_for_status()
@@ -90,7 +77,7 @@ def fetch_bibtex(doi: str) -> str:
 
 def fetch_bibtex_from_arxiv(arxiv_id: str) -> str:
     try:
-        response = requests.get(_ARXIV_API, params={"id_list": arxiv_id}, headers=_headers(), timeout=15)
+        response = requests.get(_ARXIV_API, params={"id_list": arxiv_id}, headers=user_agent(), timeout=15)
         response.raise_for_status()
     except requests.RequestException as exc:
         raise CrossrefError(f"arXiv fetch failed for {arxiv_id}: {exc}") from exc

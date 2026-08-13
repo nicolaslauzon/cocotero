@@ -13,6 +13,7 @@ from .citations import (
     search_by_title,
 )
 from .config import load_config
+from .download import download_pdf
 from .store import (
     StoreError,
     get_paper,
@@ -146,19 +147,31 @@ def cmd_add(args: argparse.Namespace) -> None:
     except StoreError as exc:
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(1)
+    interactive = len(results) == 1
+    pdf_count = 0
     for result in results:
         if result["status"] == "added":
             console.print(f"[green]Added[/green] [bold]{result['key']}[/bold] — {result['title']}")
         else:
             console.print(f"[yellow]Skipped[/yellow] [bold]{result['key']}[/bold] — already in library")
+        if result["status"] == "added" and not result["pdf"]:
+            paper = get_paper(result["key"])
+            if paper is not None:
+                outcome = download_pdf(paper, interactive=interactive)
+                if outcome["pdf"]:
+                    pdf_count += 1
+                    console.print(f"  [green]PDF[/green] via {outcome['source']}")
+                elif interactive:
+                    console.print("  [yellow]PDF: not found (paywalled).[/yellow]")
     if len(results) == 1 and results[0]["status"] == "added":
         result = results[0]
+        pdf_file = Path(result["folder"]) / "paper.pdf"
         console.print(f"  entry.bib: {result['folder']}/entry.bib")
-        console.print(f"  paper.pdf: {result['pdf'] or 'not stored'}")
+        console.print(f"  paper.pdf: {'stored' if pdf_file.is_file() else 'not stored'}")
     elif len(results) > 1:
         added = sum(1 for result in results if result["status"] == "added")
         skipped = len(results) - added
-        console.print(f"[dim]Added {added}, skipped {skipped}.[/dim]")
+        console.print(f"[dim]Added {added}, skipped {skipped}, {pdf_count} PDF(s) downloaded.[/dim]")
 
 
 def cmd_list(args: argparse.Namespace) -> None:
@@ -232,12 +245,21 @@ def cmd_cluster(args: argparse.Namespace) -> None:
         raise SystemExit(1)
     for result in results:
         set_keywords(result["key"], keywords(result["key"]) | {args.category})
+    pdf_count = 0
+    for result in results:
+        if result["status"] == "added" and not result["pdf"]:
+            paper = get_paper(result["key"])
+            if paper is not None and download_pdf(paper).get("pdf"):
+                pdf_count += 1
     for result in results:
         if result["status"] == "added":
             console.print(f"[green]Added[/green] [bold]{result['key']}[/bold] — {result['title']}")
         else:
             console.print(f"[yellow]Already in library[/yellow] [bold]{result['key']}[/bold] — tagged")
-    console.print(f"[dim]Tagged {len(results)} paper(s) as '{args.category}'.[/dim]")
+    console.print(
+        f"[dim]Tagged {len(results)} paper(s) as '{args.category}', "
+        f"{pdf_count} PDF(s) downloaded.[/dim]"
+    )
 
 
 def _open_paper_url(key: str) -> None:

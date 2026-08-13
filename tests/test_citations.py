@@ -1,7 +1,7 @@
 import pytest
 import requests
 
-from cocotero import citations
+from cocotero import citations, config
 
 
 @pytest.fixture()
@@ -25,8 +25,8 @@ class FakeResponse:
         return self._payload
 
 
-def test_headers_no_email(library):
-    headers = citations._headers()
+def test_user_agent_no_email(library):
+    headers = config.user_agent()
     assert "Cocotero/0.1" in headers["User-Agent"]
     assert "mailto:" not in headers["User-Agent"]
 
@@ -56,7 +56,6 @@ def test_search_by_title(library, monkeypatch):
     assert hits[0]["title"] == "Attention Is All You Need"
     assert hits[0]["authors"] == "Vaswani, Ashish and Shazeer, Noam"
     assert hits[0]["year"] == "2017"
-    assert hits[0]["container"] == "ArXiv"
 
 
 def test_search_by_title_network_error(library, monkeypatch):

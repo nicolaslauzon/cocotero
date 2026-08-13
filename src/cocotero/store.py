@@ -184,6 +184,9 @@ def store_paper(bib_text: str, pdf_path: str | None = None) -> StoredPaper:
     if not doi and (existing := find_by_title(library, _value(entry, "title"))):
         return _skipped_paper(existing)
 
+    if pdf_path and not Path(pdf_path).expanduser().is_file():
+        raise StoreError(f"PDF not found: {Path(pdf_path).expanduser()}")
+
     key = _unique_key(library, make_bibkey(
         first_author_lastname(_value(entry, "author")), _value(entry, "year")
     ))
@@ -193,18 +196,9 @@ def store_paper(bib_text: str, pdf_path: str | None = None) -> StoredPaper:
     entry.key = key
     if doi and not entry.get("url"):
         entry.set_field(Field("url", _doi_url(doi)))
-    if pdf_path and not entry.get("file"):
-        entry.set_field(Field("file", ":paper.pdf:PDF"))
-
     (folder / "entry.bib").write_text(write_string(Library([entry])), encoding="utf-8")
 
-    stored_pdf = None
-    if pdf_path:
-        src = Path(pdf_path).expanduser()
-        if not src.is_file():
-            raise StoreError(f"PDF not found: {src}")
-        shutil.copy2(src, folder / "paper.pdf")
-        stored_pdf = str(folder / "paper.pdf")
+    stored_pdf = link_pdf(key, pdf_path) if pdf_path else None
 
     return {
         "key": key,
@@ -214,6 +208,18 @@ def store_paper(bib_text: str, pdf_path: str | None = None) -> StoredPaper:
         "status": "added",
         "existing_key": None,
     }
+
+
+def link_pdf(key: str, pdf_path: str) -> str:
+    folder, entry = _entry_and_folder(key)
+    src = Path(pdf_path).expanduser()
+    if not src.is_file():
+        raise StoreError(f"PDF not found: {src}")
+    shutil.copy2(src, folder / "paper.pdf")
+    if not entry.get("file"):
+        entry.set_field(Field("file", ":paper.pdf:PDF"))
+    (folder / "entry.bib").write_text(write_string(Library([entry])), encoding="utf-8")
+    return str(folder / "paper.pdf")
 
 
 def store_papers(bib_text: str, pdf_path: str | None = None) -> list[StoredPaper]:
