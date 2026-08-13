@@ -123,6 +123,22 @@ def test_store_papers_bad_bibtex(library):
         store.store_papers("not bibtex at all")
 
 
+def test_store_papers_recovers_after_broken_entry(library):
+    text = (
+        "@article{a, author={Vaswani, Ashish}, year={2017}, title={T1}, doi={10.1/a}}\n"
+        "@article{b, author={Broken, Bad}, title={unclosed\n"
+        "@article{c, author={Brossard, Martin}, year={2020}, title={T3}, doi={10.2/c}}"
+    )
+    results = store.store_papers(text)
+    assert [r["key"] for r in results] == ["vaswani2017", "brossard2020"]
+    assert len(list(library.glob("*/entry.bib"))) == 2
+
+
+def test_store_papers_broken_only_returns_empty(library):
+    text = "@article{b, author={Broken, Bad}, title={unclosed"
+    assert store.store_papers(text) == []
+
+
 def test_store_paper_collision_suffix(library):
     first = store.store_paper(BIB)
     second = store.store_paper(

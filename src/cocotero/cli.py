@@ -1,5 +1,6 @@
 import argparse
 import re
+import select
 import shutil
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -47,16 +48,27 @@ def _read_paste() -> str:
     if not sys.stdin.isatty():
         return sys.stdin.read()
     try:
-        lines = [input()]
+        first = input()
     except EOFError:
         return ""
-    if not lines[0].startswith("@"):
-        return lines[0]
-    while not lines[-1].rstrip().endswith("}"):
+    if not first.startswith("@"):
+        return first
+    lines = [first]
+    depth = first.count("{") - first.count("}")
+    while True:
+        timeout = 5.0 if depth > 0 else 0.3
         try:
-            lines.append(input())
+            ready, _, _ = select.select([sys.stdin], [], [], timeout)
+        except (OSError, ValueError):
+            break
+        if not ready:
+            break
+        try:
+            line = input()
         except EOFError:
             break
+        lines.append(line)
+        depth += line.count("{") - line.count("}")
     return "\n".join(lines)
 
 
@@ -148,6 +160,9 @@ def cmd_add(args: argparse.Namespace) -> None:
         results = store_papers(bib_text, pdf_path=args.pdf)
     except StoreError as exc:
         console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1)
+    if not results:
+        console.print("[red]No valid BibTeX entries found.[/red]")
         raise SystemExit(1)
     interactive = len(results) == 1
     pdf_count = 0
@@ -256,6 +271,9 @@ def cmd_cluster(args: argparse.Namespace) -> None:
         results = store_papers(bib_text)
     except StoreError as exc:
         console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1)
+    if not results:
+        console.print("[red]No valid BibTeX entries found.[/red]")
         raise SystemExit(1)
     for result in results:
         set_keywords(result["key"], keywords(result["key"]) | {args.category})

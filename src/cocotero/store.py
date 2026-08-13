@@ -1,3 +1,4 @@
+import logging
 import re
 import shutil
 import unicodedata
@@ -8,6 +9,8 @@ from bibtexparser import Library, parse_string, write_string
 from bibtexparser.model import Entry, Field
 
 from .config import load_config
+
+logging.getLogger("bibtexparser").setLevel(logging.ERROR)
 
 
 class StoreError(Exception):
@@ -52,6 +55,24 @@ _ANSI_ESCAPE = re.compile(
 
 def _sanitize_bibtex(bib_text: str) -> str:
     return _ANSI_ESCAPE.sub("", bib_text)
+
+
+def _split_blocks(bib_text: str) -> list[str]:
+    blocks: list[str] = []
+    depth = 0
+    current: list[str] = []
+    for char in bib_text:
+        current.append(char)
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                blocks.append("".join(current))
+                current = []
+    if current:
+        blocks.append("".join(current))
+    return [block for block in blocks if block.strip().startswith("@")]
 
 
 def first_author_lastname(author: str) -> str:
@@ -226,11 +247,17 @@ def link_pdf(key: str, pdf_path: str) -> str:
 
 
 def store_papers(bib_text: str, pdf_path: str | None = None) -> list[StoredPaper]:
-    entries = _entries(bib_text)
-    return [
-        store_paper(write_string(Library([entry])), pdf_path=pdf_path)
-        for entry in entries
-    ]
+    blocks = _split_blocks(_sanitize_bibtex(bib_text))
+    if not blocks:
+        raise StoreError("No BibTeX entries found in the input.")
+    results = []
+    for block in blocks:
+        try:
+            entry = _entries(block)[0]
+        except StoreError:
+            continue
+        results.append(store_paper(write_string(Library([entry])), pdf_path=pdf_path))
+    return results
 
 
 def list_papers(category: str | None = None) -> list[Paper]:
