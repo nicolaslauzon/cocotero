@@ -16,10 +16,14 @@ from .config import load_config
 from .store import (
     StoreError,
     get_paper,
+    keywords,
+    list_categories,
     list_papers,
     resolve_paper_url,
     search_index,
+    set_keywords,
     store_papers,
+    toggle_keyword,
 )
 from .ui import fzf_select, open_in_browser
 
@@ -157,16 +161,20 @@ def cmd_add(args: argparse.Namespace) -> None:
         console.print(f"[dim]Added {added}, skipped {skipped}.[/dim]")
 
 
-def cmd_list(_args: argparse.Namespace) -> None:
-    papers = list_papers()
+def cmd_list(args: argparse.Namespace) -> None:
+    papers = list_papers(category=args.cat)
     if not papers:
-        console.print("Library is empty. Add a paper with `cocotero add`.")
+        if args.cat:
+            console.print(f"No papers in category '{args.cat}'.")
+        else:
+            console.print("Library is empty. Add a paper with `cocotero add`.")
         return
     table = Table(show_header=True, header_style="bold")
     table.add_column("Key", style="cyan")
     table.add_column("Year")
     table.add_column("Authors")
     table.add_column("Title")
+    table.add_column("Categories")
     table.add_column("PDF")
     for paper in papers:
         table.add_row(
@@ -174,9 +182,62 @@ def cmd_list(_args: argparse.Namespace) -> None:
             paper["year"],
             paper["authors"],
             paper["title"],
+            paper["keywords"] or "—",
             "yes" if paper["has_pdf"] else "no",
         )
     console.print(table)
+
+
+def cmd_cat(args: argparse.Namespace) -> None:
+    try:
+        if args.cat:
+            added = toggle_keyword(args.key, args.cat)
+            verb = "Added" if added else "Removed"
+            console.print(f"[green]{verb}[/green] tag '{args.cat}' [bold]{args.key}[/bold].")
+        else:
+            tags = keywords(args.key)
+            listing = ", ".join(sorted(tags)) if tags else "(none)"
+            console.print(f"Tags for [bold]{args.key}[/bold]: {listing}")
+    except StoreError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1)
+
+
+def cmd_cats(_args: argparse.Namespace) -> None:
+    counts = list_categories()
+    if not counts:
+        console.print("No categories yet. Tag papers with `cocotero cat <key> <category>`.")
+        return
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Category", style="cyan")
+    table.add_column("Papers")
+    for category, count in counts:
+        table.add_row(category, str(count))
+    console.print(table)
+
+
+def cmd_cluster(args: argparse.Namespace) -> None:
+    if args.text:
+        bib_text = _route_paste(" ".join(args.text))
+    else:
+        bib_text = _route_paste(_read_paste())
+    bib_text = bib_text.strip()
+    if not bib_text:
+        console.print("[red]No BibTeX received.[/red]")
+        raise SystemExit(1)
+    try:
+        results = store_papers(bib_text)
+    except StoreError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1)
+    for result in results:
+        set_keywords(result["key"], keywords(result["key"]) | {args.category})
+    for result in results:
+        if result["status"] == "added":
+            console.print(f"[green]Added[/green] [bold]{result['key']}[/bold] — {result['title']}")
+        else:
+            console.print(f"[yellow]Already in library[/yellow] [bold]{result['key']}[/bold] — tagged")
+    console.print(f"[dim]Tagged {len(results)} paper(s) as '{args.category}'.[/dim]")
 
 
 def _open_paper_url(key: str) -> None:
@@ -193,10 +254,13 @@ def _open_paper_url(key: str) -> None:
     open_in_browser(url)
 
 
-def _fzf_pick_paper() -> str | None:
-    lines = search_index()
+def _fzf_pick_paper(category: str | None = None) -> str | None:
+    lines = search_index(category=category)
     if not lines:
-        console.print("Library is empty. Add a paper with `cocotero add`.")
+        if category:
+            console.print(f"No papers in category '{category}'.")
+        else:
+            console.print("Library is empty. Add a paper with `cocotero add`.")
         raise SystemExit(1)
     library = Path(load_config()["library"])
     preview = (
@@ -210,7 +274,7 @@ def _fzf_pick_paper() -> str | None:
 
 
 def cmd_open(args: argparse.Namespace) -> None:
-    key = args.key or _fzf_pick_paper()
+    key = args.key or _fzf_pick_paper(category=args.cat)
     if key is not None:
         _open_paper_url(key)
 
@@ -227,10 +291,28 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("-d", "--doi", help="DOI (Crossref BibTeX lookup).")
     add.set_defaults(func=cmd_add)
 
-    sub.add_parser("list", help="List all papers.").set_defaults(func=cmd_list)
+    list_parser = sub.add_parser("list", help="List all papers.")
+    list_parser.add_argument("--cat", help="Only show papers with this category.")
+    list_parser.set_defaults(func=cmd_list)
     open_parser = sub.add_parser("open", help="Open a paper in your browser. Without a key, pick via fzf.")
     open_parser.add_argument("key", nargs="?")
+    open_parser.add_argument("--cat", help="Only fuzzy-pick among papers with this category.")
     open_parser.set_defaults(func=cmd_open)
+
+    cat_parser = sub.add_parser("cat", help="Show or toggle a category tag on a paper.")
+    cat_parser.add_argument("key")
+    cat_parser.add_argument("cat", nargs="?", help="Category to add/remove (omit to list tags).")
+    cat_parser.set_defaults(func=cmd_cat)
+
+    sub.add_parser("cats", help="List categories with paper counts.").set_defaults(func=cmd_cats)
+
+    cluster_parser = sub.add_parser(
+        "cluster",
+        help="Add a pasted bibliography and tag every paper with one category.",
+    )
+    cluster_parser.add_argument("category")
+    cluster_parser.add_argument("text", nargs="*")
+    cluster_parser.set_defaults(func=cmd_cluster)
     return parser
 
 

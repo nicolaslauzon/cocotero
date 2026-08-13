@@ -1,6 +1,6 @@
 import argparse
 
-from cocotero import cli
+from cocotero import cli, store
 
 
 def test_get_bibtex_routes_positional_text(monkeypatch):
@@ -72,3 +72,38 @@ def test_route_paste_arxiv(monkeypatch):
 def test_route_paste_title(monkeypatch):
     monkeypatch.setattr(cli, "_lookup_by_title", lambda title: "bibtex")
     assert cli._route_paste("Attention Is All You Need") == "bibtex"
+
+
+def _isolated_library(tmp_path, monkeypatch):
+    monkeypatch.setenv("COCOTERO_LIB", str(tmp_path))
+    monkeypatch.setenv("COCOTERO_CONFIG", str(tmp_path / "config.toml"))
+
+
+def test_cmd_cat_toggle(tmp_path, monkeypatch):
+    _isolated_library(tmp_path, monkeypatch)
+    store.store_paper("@article{x, author={Vaswani, Ashish}, year={2017}, title={T}, doi={10.1/x}}")
+    args = argparse.Namespace(key="vaswani2017", cat="imu")
+    cli.cmd_cat(args)
+    assert store.keywords("vaswani2017") == {"imu"}
+    cli.cmd_cat(args)
+    assert store.keywords("vaswani2017") == set()
+
+
+def test_cmd_cat_shows_tags(tmp_path, monkeypatch):
+    _isolated_library(tmp_path, monkeypatch)
+    store.store_paper("@article{x, author={Vaswani, Ashish}, year={2017}, title={T}, doi={10.1/x}}")
+    store.set_keywords("vaswani2017", {"imu", "slam"})
+    cli.cmd_cat(argparse.Namespace(key="vaswani2017", cat=None))
+    assert store.keywords("vaswani2017") == {"imu", "slam"}
+
+
+def test_cmd_cluster_tags_all_papers(tmp_path, monkeypatch):
+    _isolated_library(tmp_path, monkeypatch)
+    bib = (
+        "@article{x, author={Vaswani, Ashish}, year={2017}, title={T1}, doi={10.1/x}}\n"
+        "@article{y, author={Brossard, Martin}, year={2020}, title={T2}, doi={10.2/y}}"
+    )
+    monkeypatch.setattr(cli, "_read_paste", lambda: bib)
+    cli.cmd_cluster(argparse.Namespace(category="paper-1", text=[]))
+    assert store.keywords("vaswani2017") == {"paper-1"}
+    assert store.keywords("brossard2020") == {"paper-1"}

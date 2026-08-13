@@ -197,3 +197,42 @@ def test_resolve_paper_url_missing(library):
     store.store_paper("@article{x, author={Vaswani, Ashish}, year={2017}, title={T}}")
     with pytest.raises(StoreError):
         store.resolve_paper_url(store.get_paper("vaswani2017"))
+
+
+def test_keywords_roundtrip(library):
+    result = store.store_paper(BIB)
+    assert store.keywords(result["key"]) == set()
+    store.set_keywords(result["key"], {"imu", "deep-learning"})
+    assert store.keywords(result["key"]) == {"imu", "deep-learning"}
+    text = (library / result["key"] / "entry.bib").read_text()
+    assert "keywords = {deep-learning, imu}" in text
+    store.set_keywords(result["key"], set())
+    assert store.keywords(result["key"]) == set()
+    assert "keywords" not in (library / result["key"] / "entry.bib").read_text()
+
+
+def test_toggle_keyword(library):
+    result = store.store_paper(BIB)
+    assert store.toggle_keyword(result["key"], "imu") is True
+    assert store.keywords(result["key"]) == {"imu"}
+    assert store.toggle_keyword(result["key"], "imu") is False
+    assert store.keywords(result["key"]) == set()
+
+
+def test_list_papers_filter_by_category(library):
+    store.store_paper(BIB)
+    store.set_keywords("vaswani2017", {"transformers"})
+    assert len(store.list_papers(category="transformers")) == 1
+    assert store.list_papers(category="imu") == []
+
+
+def test_list_categories_counts(library):
+    store.store_paper(BIB)
+    store.set_keywords("vaswani2017", {"attention", "transformers"})
+    assert sorted(store.list_categories()) == [("attention", 1), ("transformers", 1)]
+
+
+def test_get_paper_includes_keywords(library):
+    store.store_paper(BIB)
+    store.set_keywords("vaswani2017", {"attention"})
+    assert store.get_paper("vaswani2017")["keywords"] == "attention"

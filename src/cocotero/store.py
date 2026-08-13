@@ -32,6 +32,7 @@ class Paper(TypedDict):
     doi: str
     has_pdf: bool
     folder: str
+    keywords: str
 
 
 def slugify(text: str) -> str:
@@ -84,6 +85,18 @@ def _doi_url(doi: str) -> str:
 
 def _normalized_title(title: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", title.lower())
+
+
+def _split_keywords(text: str) -> set[str]:
+    return {keyword.strip().lower() for keyword in text.split(",") if keyword.strip()}
+
+
+def _keywords(entry: Entry) -> set[str]:
+    return _split_keywords(_value(entry, "keywords"))
+
+
+def _keywords_text(keywords: set[str]) -> str:
+    return ", ".join(sorted(keywords))
 
 
 def _unique_key(library: Path, wanted: str) -> str:
@@ -208,16 +221,17 @@ def store_papers(bib_text: str, pdf_path: str | None = None) -> list[StoredPaper
     return [store_paper(write_string(Library([entry])), pdf_path=pdf_path) for entry in entries]
 
 
-def list_papers() -> list[Paper]:
+def list_papers(category: str | None = None) -> list[Paper]:
     library = Path(load_config()["library"])
     normalize_library()
+    wanted = category.lower() if category else None
     papers: list[Paper] = []
     for entry_bib in sorted(library.glob("*/entry.bib")):
         try:
             entry = _entries(entry_bib.read_text(encoding="utf-8"))[0]
         except StoreError:
             continue
-        papers.append({
+        paper: Paper = {
             "key": entry.key,
             "year": _value(entry, "year"),
             "authors": _value(entry, "author"),
@@ -226,7 +240,11 @@ def list_papers() -> list[Paper]:
             "doi": _value(entry, "doi"),
             "has_pdf": (entry_bib.parent / "paper.pdf").is_file(),
             "folder": str(entry_bib.parent),
-        })
+            "keywords": _value(entry, "keywords"),
+        }
+        if wanted and wanted not in _split_keywords(paper["keywords"]):
+            continue
+        papers.append(paper)
     return papers
 
 
@@ -234,10 +252,47 @@ def get_paper(key: str) -> Paper | None:
     return next((paper for paper in list_papers() if paper["key"] == key), None)
 
 
-def search_index() -> list[str]:
+def _entry_and_folder(key: str) -> tuple[Path, Entry]:
+    for folder, entry in _scan(Path(load_config()["library"])):
+        if entry.key == key:
+            return folder, entry
+    raise StoreError(f"No paper with key '{key}'.")
+
+
+def keywords(key: str) -> set[str]:
+    _, entry = _entry_and_folder(key)
+    return _keywords(entry)
+
+
+def set_keywords(key: str, value: set[str]) -> None:
+    folder, entry = _entry_and_folder(key)
+    entry.fields = [field for field in entry.fields if field.key != "keywords"]
+    if value:
+        entry.set_field(Field("keywords", _keywords_text(value)))
+    (folder / "entry.bib").write_text(write_string(Library([entry])), encoding="utf-8")
+
+
+def toggle_keyword(key: str, category: str) -> bool:
+    current = keywords(key)
+    if category in current:
+        set_keywords(key, current - {category})
+        return False
+    set_keywords(key, current | {category})
+    return True
+
+
+def list_categories() -> list[tuple[str, int]]:
+    counts: dict[str, int] = {}
+    for paper in list_papers():
+        for category in _split_keywords(paper["keywords"]):
+            counts[category] = counts.get(category, 0) + 1
+    return sorted(counts.items())
+
+
+def search_index(category: str | None = None) -> list[str]:
     return [
         f"{paper['key']}\t{paper['year']} {paper['authors']} — {paper['title']}"
-        for paper in list_papers()
+        for paper in list_papers(category)
     ]
 
 
