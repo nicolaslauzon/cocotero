@@ -94,6 +94,23 @@ cocotero cite <key>                  # print the stored BibTeX entry
 cocotero cite                        # fuzzy-pick a paper, print its BibTeX
 ```
 
+### Reading programmatically
+
+`read` resolves a paper without any interactive prompt — for scripts and AI
+agents:
+
+```sh
+cocotero read brossard2020            # by key → metadata + absolute bib/pdf paths
+cocotero read 10.1109/LRA.2020.3003256   # by DOI
+cocotero read "attention is all"      # unique title fragment
+cocotero read <query> --json          # full record incl. paths as JSON
+cocotero read <query> --bibtex        # raw stored BibTeX (non-interactive cite)
+```
+
+Resolution order: exact key → DOI → exact normalized title → case-insensitive
+title/key substring (must be unambiguous; otherwise candidate keys are listed).
+`pdf:` shows the absolute path to the stored PDF, or `none`.
+
 ### Clusters
 
 Papers are organized into **clusters** (categories). A cluster is created when
