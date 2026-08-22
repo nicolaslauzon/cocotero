@@ -1,4 +1,5 @@
 import argparse
+import json
 import re
 import select
 import sys
@@ -23,6 +24,8 @@ from .store import (
     link_pdf,
     list_papers,
     paper_from_result,
+    paper_paths,
+    resolve_paper,
     resolve_paper_url,
     search_index,
     set_categories,
@@ -427,6 +430,44 @@ def cmd_cite(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_read(args: argparse.Namespace) -> None:
+    query = " ".join(args.query).strip()
+    if not query:
+        console.print("[red]Usage: cocotero read <key | doi | title>[/red]")
+        raise SystemExit(1)
+    try:
+        paper = resolve_paper(query)
+        paths = paper_paths(paper)
+    except StoreError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1)
+    if args.bibtex:
+        sys.stdout.write(Path(paths["bib"]).read_text(encoding="utf-8"))
+        return
+    record = {
+        **paper,
+        "bib": paths["bib"],
+        "pdf": paths["pdf"] or None,
+    }
+    if args.json:
+        json.dump(record, sys.stdout, indent=2, ensure_ascii=False)
+        sys.stdout.write("\n")
+        return
+    lines = [
+        f"key: {record['key']}",
+        f"title: {record['title']}",
+        f"authors: {record['authors']}",
+        f"year: {record['year']}",
+        f"doi: {record['doi'] or 'none'}",
+        f"url: {record['url'] or 'none'}",
+        f"categories: {record['categories'] or 'none'}",
+        f"arxiv: {record['arxiv'] or 'none'}",
+        f"bib: {record['bib']}",
+        f"pdf: {record['pdf'] or 'none'}",
+    ]
+    sys.stdout.write("\n".join(lines) + "\n")
+
+
 def cmd_clean(args: argparse.Namespace) -> None:
     keep = set(args.keep) or None
     try:
@@ -494,6 +535,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cite_parser.add_argument("key", nargs="?")
     cite_parser.set_defaults(func=cmd_cite)
+
+    read_parser = sub.add_parser(
+        "read",
+        help="Non-interactive lookup: metadata plus absolute bib/pdf paths.",
+    )
+    read_parser.add_argument(
+        "query", nargs="*", help="Key, DOI, arXiv ID, or title fragment."
+    )
+    read_parser.add_argument(
+        "--json", action="store_true", help="Print the full record as JSON."
+    )
+    read_parser.add_argument(
+        "--bibtex", action="store_true", help="Print the stored BibTeX entry instead."
+    )
+    read_parser.set_defaults(func=cmd_read)
 
     cluster_parser = sub.add_parser(
         "cluster",

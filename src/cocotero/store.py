@@ -34,6 +34,7 @@ class Paper(TypedDict):
     title: str
     url: str
     doi: str
+    arxiv: str
     has_pdf: bool
     folder: str
     categories: str
@@ -348,6 +349,16 @@ def set_doi(key: str, doi: str) -> None:
     entry_bib.write_text(write_string(Library([entry])), encoding="utf-8")
 
 
+def _arxiv_id(entry: Entry) -> str:
+    match = re.search(r"\d{4}\.\d{4,5}(?:v\d+)?", _value(entry, "eprint"))
+    if match:
+        return match.group(0)
+    match = re.search(
+        r"arxiv\.org/(?:abs|pdf)/([^\s/?#]+)", _value(entry, "url"), re.IGNORECASE
+    )
+    return match.group(1) if match else ""
+
+
 def _paper(entry_bib: Path) -> Paper:
     entry = _entries(entry_bib.read_text(encoding="utf-8"))[0]
     return {
@@ -357,6 +368,7 @@ def _paper(entry_bib: Path) -> Paper:
         "title": _value(entry, "title"),
         "url": _value(entry, "url"),
         "doi": _normalize_doi(_value(entry, "doi")),
+        "arxiv": _arxiv_id(entry),
         "has_pdf": _pdf_path(entry_bib.parent.parent, entry.key).is_file(),
         "folder": str(entry_bib.parent.parent),
         "categories": _value(entry, "category"),
@@ -386,6 +398,48 @@ def list_papers(category: str | None = None) -> list[Paper]:
 
 def get_paper(key: str) -> Paper | None:
     return next((paper for paper in list_papers() if paper["key"] == key), None)
+
+
+def paper_paths(paper: Paper) -> dict[str, str]:
+    folder = Path(paper["folder"])
+    pdf = _pdf_path(folder, paper["key"])
+    return {
+        "bib": str(_bib_path(folder, paper["key"])),
+        "pdf": str(pdf) if pdf.is_file() else "",
+    }
+
+
+def resolve_paper(query: str) -> Paper:
+    query = " ".join(query.split()).strip()
+    if not query:
+        raise StoreError("No query given.")
+    lowered = query.lower()
+    papers = list_papers()
+    for paper in papers:
+        if paper["key"] == lowered:
+            return paper
+    query_doi = _normalize_doi(query).lower()
+    query_title = _normalized_title(query)
+    substring_matches: list[Paper] = []
+    for paper in papers:
+        if query_doi and paper["doi"].lower() == query_doi:
+            return paper
+        if query_title and _normalized_title(paper["title"]) == query_title:
+            return paper
+        if lowered in paper["title"].lower() or lowered in paper["key"]:
+            substring_matches.append(paper)
+    if not substring_matches:
+        raise StoreError(f"No paper matching '{query}'.")
+    if len(substring_matches) > 1:
+        listing = "\n".join(
+            f"  {paper['key']} — {paper['title']}" for paper in substring_matches[:10]
+        )
+        extra = len(substring_matches) - 10
+        suffix = f"\n  …and {extra} more" if extra > 0 else ""
+        raise StoreError(
+            f"'{query}' matches {len(substring_matches)} papers:\n{listing}{suffix}"
+        )
+    return substring_matches[0]
 
 
 def _entry_and_bib(key: str) -> tuple[Path, Entry]:

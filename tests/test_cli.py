@@ -242,3 +242,107 @@ def test_cmd_pdf_retry_all_handoffs_paywalled(tmp_path, monkeypatch):
     )
     cli.cmd_pdf(argparse.Namespace(key=None, path=None, handoff="auto"))
     assert handed == [(["vaswani2017"], "auto")]
+
+
+def _seed_read_papers():
+    store.store_paper(
+        "@article{x, author={Vaswani, Ashish}, year={2017}, "
+        "title={Attention Is All You Need}, "
+        "url={https://arxiv.org/abs/1706.03762}}"
+    )
+    store.store_paper(
+        "@article{y, author={Brossard, Martin}, year={2020}, "
+        "title={Deep Reinforcement Learning for Robots}, "
+        "doi={10.1109/LRA.2020.3003256}}"
+    )
+
+
+def test_cmd_read_by_key(tmp_path, monkeypatch, capsys):
+    _isolated_library(tmp_path, monkeypatch)
+    _seed_read_papers()
+    cli.cmd_read(argparse.Namespace(query=["brossard2020"], json=False, bibtex=False))
+    out = capsys.readouterr().out
+    assert "key: brossard2020" in out
+    assert str(tmp_path / "bib" / "brossard2020.bib") in out
+    assert "pdf: none" in out
+
+
+def test_cmd_read_by_doi(tmp_path, monkeypatch, capsys):
+    _isolated_library(tmp_path, monkeypatch)
+    _seed_read_papers()
+    cli.cmd_read(
+        argparse.Namespace(query=["10.1109/LRA.2020.3003256"], json=False, bibtex=False)
+    )
+    assert "key: brossard2020" in capsys.readouterr().out
+
+
+def test_cmd_read_by_unique_title_fragment(tmp_path, monkeypatch, capsys):
+    _isolated_library(tmp_path, monkeypatch)
+    _seed_read_papers()
+    cli.cmd_read(argparse.Namespace(query=["reinforcement"], json=False, bibtex=False))
+    assert "key: brossard2020" in capsys.readouterr().out
+
+
+def test_cmd_read_extracts_arxiv_id(tmp_path, monkeypatch, capsys):
+    _isolated_library(tmp_path, monkeypatch)
+    _seed_read_papers()
+    cli.cmd_read(argparse.Namespace(query=["vaswani2017"], json=False, bibtex=False))
+    out = capsys.readouterr().out
+    assert "arxiv: 1706.03762" in out
+
+
+def test_cmd_read_ambiguous_lists_candidates(tmp_path, monkeypatch, capsys):
+    _isolated_library(tmp_path, monkeypatch)
+    _seed_read_papers()
+    try:
+        cli.cmd_read(argparse.Namespace(query=["s"], json=False, bibtex=False))
+    except SystemExit as exc:
+        assert exc.code == 1
+    out = capsys.readouterr().out
+    assert "brossard2020" in out
+    assert "vaswani2017" in out
+
+
+def test_cmd_read_unknown_exits(tmp_path, monkeypatch, capsys):
+    _isolated_library(tmp_path, monkeypatch)
+    _seed_read_papers()
+    try:
+        cli.cmd_read(
+            argparse.Namespace(query=["zzznotapaper"], json=False, bibtex=False)
+        )
+    except SystemExit as exc:
+        assert exc.code == 1
+    assert "No paper matching 'zzznotapaper'" in capsys.readouterr().out
+
+
+def test_cmd_read_empty_query_exits(tmp_path, monkeypatch, capsys):
+    _isolated_library(tmp_path, monkeypatch)
+    try:
+        cli.cmd_read(argparse.Namespace(query=[], json=False, bibtex=False))
+    except SystemExit as exc:
+        assert exc.code == 1
+    assert "Usage:" in capsys.readouterr().out
+
+
+def test_cmd_read_json(tmp_path, monkeypatch, capsys):
+    import json
+
+    _isolated_library(tmp_path, monkeypatch)
+    _seed_read_papers()
+    pdf = tmp_path / "manual.pdf"
+    pdf.write_bytes(b"%PDF-1.4 manual")
+    store.link_pdf("brossard2020", str(pdf))
+    cli.cmd_read(argparse.Namespace(query=["brossard"], json=True, bibtex=False))
+    record = json.loads(capsys.readouterr().out)
+    assert record["key"] == "brossard2020"
+    assert record["doi"] == "10.1109/lra.2020.3003256"
+    assert record["pdf"] == str(tmp_path / "pdf" / "brossard2020.pdf")
+    assert record["bib"] == str(tmp_path / "bib" / "brossard2020.bib")
+
+
+def test_cmd_read_bibtex_flag(tmp_path, monkeypatch, capsys):
+    _isolated_library(tmp_path, monkeypatch)
+    _seed_read_papers()
+    cli.cmd_read(argparse.Namespace(query=["vaswani2017"], json=False, bibtex=True))
+    out = capsys.readouterr().out
+    assert "@article{vaswani2017," in out
