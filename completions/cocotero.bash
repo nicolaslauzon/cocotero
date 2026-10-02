@@ -2,11 +2,19 @@ _cocotero() {
   local cur
   cur="${COMP_WORDS[COMP_CWORD]}"
   if (( COMP_CWORD == 1 )); then
-    COMPREPLY=($(compgen -W "add open browse-cluster cite cluster pdf rm clean login" -- "$cur"))
+    COMPREPLY=($(compgen -W "add open browse-cluster cite read cluster pdf rm clean sync reading login" -- "$cur"))
     return
   fi
   case "${COMP_WORDS[1]}" in
-    open|pdf|rm|cite)
+    reading)
+      if (( COMP_CWORD == 2 )); then
+        COMPREPLY=($(compgen -W "list current add progress done drop" -- "$cur"))
+      elif (( COMP_CWORD == 3 )); then
+        local lib="${COCOTERO_LIB:-$HOME/cocotero/library}"
+        COMPREPLY=($(compgen -W "$(for f in "$lib"/bib/*.bib; do [ -e "$f" ] && basename "$f" .bib; done)" -- "$cur"))
+      fi
+      ;;
+    open|pdf|rm|cite|read)
       if (( COMP_CWORD == 2 )); then
         local lib="${COCOTERO_LIB:-$HOME/cocotero/library}"
         COMPREPLY=($(compgen -W "$(for f in "$lib"/bib/*.bib; do [ -e "$f" ] && basename "$f" .bib; done)" -- "$cur"))

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from rich.console import Console
 
+from . import reading
 from .citations import (
     CrossrefError,
     fetch_bibtex,
@@ -31,6 +32,7 @@ from .store import (
     set_categories,
     store_papers,
 )
+from .sync import drive_link, sync_library
 from .ui import fzf_select, open_in_browser
 
 console = Console()
@@ -206,6 +208,19 @@ def _report_failures(failures: dict[str, str]) -> None:
         console.print(f"[dim]  {key} — {reason}[/dim]")
 
 
+def _auto_sync() -> None:
+    cfg = load_config()
+    if not (cfg["auto_sync"] and cfg["drive_remote"]):
+        return
+    console.print("[dim]Syncing library to Drive…[/dim]")
+    try:
+        report = sync_library()
+    except StoreError as exc:
+        console.print(f"[yellow]Sync skipped: {exc}[/yellow]")
+        return
+    console.print(f"[dim]Synced: {report['linked']} PDF(s) on Drive.[/dim]")
+
+
 def cmd_add(args: argparse.Namespace) -> None:
     bib_text = _get_bibtex(args).strip()
     if not bib_text:
@@ -230,7 +245,7 @@ def cmd_add(args: argparse.Namespace) -> None:
             console.print(
                 f"[yellow]Skipped[/yellow] [bold]{result['key']}[/bold] — already in library"
             )
-    pdf_count = _download_for(results, interactive, handoff_mode)
+    pdf_count = 0 if args.no_pdf else _download_for(results, interactive, handoff_mode)
     if len(results) == 1 and results[0]["status"] == "added":
         result = results[0]
         pdf_file = Path(result["folder"]) / "pdf" / f"{result['key']}.pdf"
@@ -242,6 +257,8 @@ def cmd_add(args: argparse.Namespace) -> None:
         console.print(
             f"[dim]Added {added}, skipped {skipped}, {pdf_count} PDF(s) downloaded.[/dim]"
         )
+    if any(result["status"] == "added" for result in results):
+        _auto_sync()
 
 
 def cmd_cluster(args: argparse.Namespace) -> None:
@@ -328,6 +345,7 @@ def cmd_pdf(args: argparse.Namespace) -> None:
         if args.path:
             stored = link_pdf(args.key, args.path)
             console.print(f"[green]Linked[/green] [bold]{args.key}[/bold] → {stored}")
+            _auto_sync()
             return
         if args.key:
             paper = get_paper(args.key)
@@ -342,6 +360,7 @@ def cmd_pdf(args: argparse.Namespace) -> None:
                 console.print(
                     f"[green]{args.key}[/green] — PDF via {outcome['source']}"
                 )
+                _auto_sync()
                 return
             if _should_handoff(paper, cfg):
                 handoff_paywalled([paper], cfg, handoff_mode)
@@ -349,6 +368,7 @@ def cmd_pdf(args: argparse.Namespace) -> None:
             console.print(f"[yellow]{args.key}[/yellow] — not found (paywalled).")
             return
         _retry_missing_pdfs(handoff_mode)
+        _auto_sync()
     except StoreError as exc:
         console.print(f"[red]{exc}[/red]")
         raise SystemExit(1)
@@ -448,6 +468,7 @@ def cmd_read(args: argparse.Namespace) -> None:
         **paper,
         "bib": paths["bib"],
         "pdf": paths["pdf"] or None,
+        "drive": drive_link(paper) or None,
     }
     if args.json:
         json.dump(record, sys.stdout, indent=2, ensure_ascii=False)
@@ -464,8 +485,107 @@ def cmd_read(args: argparse.Namespace) -> None:
         f"arxiv: {record['arxiv'] or 'none'}",
         f"bib: {record['bib']}",
         f"pdf: {record['pdf'] or 'none'}",
+        f"drive: {record['drive'] or 'none'}",
     ]
     sys.stdout.write("\n".join(lines) + "\n")
+
+
+def cmd_sync(_args: argparse.Namespace) -> None:
+    try:
+        report = sync_library()
+    except StoreError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1)
+    if report["pulled"]:
+        console.print(f"Pulled {len(report['pulled'])} new paper(s).")
+    for key in report["fetched"]:
+        console.print(f"  [green]PDF[/green] {key}")
+    if not report["uploaded"]:
+        console.print(
+            "[yellow]No drive_remote configured; Drive upload skipped.[/yellow]"
+        )
+    pushed = ", pushed" if report["pushed"] else ""
+    console.print(
+        f"[green]Synced[/green]: {report['linked']} PDF(s) on Drive, map.md updated{pushed}."
+    )
+
+
+def _reading_line(entry: reading.ReadingEntry) -> str:
+    progress = f" ({entry['progress']})" if entry["progress"] else ""
+    note = f" — {entry['note']}" if entry["note"] else ""
+    return f"{entry['status']:<8} {entry['key']}{progress}: {entry['title']}{note}"
+
+
+def _reading_record(entry: reading.ReadingEntry) -> dict[str, str]:
+    paper = get_paper(entry["key"])
+    if paper is None:
+        return {**entry, "drive": "", "url": ""}
+    try:
+        url = resolve_paper_url(paper)
+    except StoreError:
+        url = ""
+    return {**entry, "drive": drive_link(paper), "url": url}
+
+
+def _reading_list(args: argparse.Namespace) -> None:
+    items = reading.entries()
+    if not args.all:
+        items = [item for item in items if item["status"] in ("queued", "reading")]
+    if args.json:
+        json.dump(items, sys.stdout, indent=2, ensure_ascii=False)
+        sys.stdout.write("\n")
+        return
+    if not items:
+        console.print("Reading list is empty.")
+        return
+    for item in sorted(items, key=lambda item: item["updated"], reverse=True):
+        console.print(_reading_line(item), markup=False, highlight=False)
+
+
+def _reading_current(args: argparse.Namespace) -> None:
+    entry = reading.current()
+    if entry is None:
+        if args.json:
+            sys.stdout.write("null\n")
+        else:
+            console.print("Nothing in progress.")
+        return
+    record = _reading_record(entry)
+    if args.json:
+        json.dump(record, sys.stdout, indent=2, ensure_ascii=False)
+        sys.stdout.write("\n")
+        return
+    console.print(_reading_line(entry), markup=False, highlight=False)
+    console.print(f"drive: {record['drive'] or 'none'}", markup=False)
+    console.print(f"url: {record['url'] or 'none'}", markup=False)
+
+
+def _reading_update(args: argparse.Namespace) -> None:
+    paper = resolve_paper(" ".join(args.query))
+    note = args.note or ""
+    if args.action == "add":
+        entry = reading.add(paper)
+    elif args.action == "progress":
+        entry = reading.set_progress(paper, args.where, note)
+    elif args.action == "done":
+        entry = reading.finish(paper, note)
+    else:
+        entry = reading.drop(paper, note)
+    console.print(_reading_line(entry), markup=False, highlight=False)
+
+
+def cmd_reading(args: argparse.Namespace) -> None:
+    action = args.action or "list"
+    try:
+        if action == "list":
+            _reading_list(args)
+        elif action == "current":
+            _reading_current(args)
+        else:
+            _reading_update(args)
+    except StoreError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise SystemExit(1)
 
 
 def cmd_clean(args: argparse.Namespace) -> None:
@@ -490,6 +610,32 @@ def cmd_login(_args: argparse.Namespace) -> None:
         raise SystemExit(1)
 
 
+def _add_reading_parser(sub: argparse._SubParsersAction) -> None:
+    parser = sub.add_parser(
+        "reading", help="Reading list: queue papers and track progress."
+    )
+    parser.set_defaults(func=cmd_reading, action=None, all=False, json=False)
+    actions = parser.add_subparsers(dest="action")
+    list_parser = actions.add_parser("list", help="Show queued and in-progress papers.")
+    list_parser.add_argument("--all", action="store_true", help="Include done/dropped.")
+    list_parser.add_argument("--json", action="store_true")
+    current = actions.add_parser(
+        "current", help="The paper read most recently that is not finished."
+    )
+    current.add_argument("--json", action="store_true")
+    for name, help_text in [
+        ("add", "Queue a paper."),
+        ("progress", "Record how far you are, e.g. p12/30 or 40%%."),
+        ("done", "Mark a paper as finished."),
+        ("drop", "Stop reading a paper."),
+    ]:
+        action = actions.add_parser(name, help=help_text)
+        action.add_argument("query", nargs="+", help="Key, DOI, or title fragment.")
+        if name == "progress":
+            action.add_argument("--at", dest="where", required=True)
+        action.add_argument("--note", help="Free-form note (e.g. your impressions).")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cocotero", description="CLI paper manager.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -510,6 +656,11 @@ def build_parser() -> argparse.ArgumentParser:
         "-t", "--title", help="Article title (Crossref lookup + fzf pick)."
     )
     add.add_argument("-d", "--doi", help="DOI (Crossref BibTeX lookup).")
+    add.add_argument(
+        "--no-pdf",
+        action="store_true",
+        help="Store the BibTeX only; skip PDF downloads (e.g. in the cloud).",
+    )
     add.add_argument(
         "--handoff",
         choices=["assisted", "auto"],
@@ -595,6 +746,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="User categories to preserve (repeatable; default: dubois2026).",
     )
     clean_parser.set_defaults(func=cmd_clean)
+
+    sub.add_parser(
+        "sync",
+        help="Pull the library repo, mirror PDFs to Google Drive, refresh map.md, push.",
+    ).set_defaults(func=cmd_sync)
+
+    _add_reading_parser(sub)
 
     sub.add_parser(
         "login", help="Save an EZproxy session for auto PDF downloads."

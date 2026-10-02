@@ -2,13 +2,21 @@
 
 _cocotero() {
   local -a commands keys cats
-  commands=(add open browse-cluster cite cluster pdf rm clean login)
+  commands=(add open browse-cluster cite read cluster pdf rm clean sync reading login)
   if (( CURRENT == 2 )); then
     _describe 'command' commands
     return
   fi
   case "$words[2]" in
-    open|pdf|rm|cite)
+    reading)
+      if (( CURRENT == 3 )); then
+        _values 'action' list current add progress done drop
+      else
+        keys=(${(f)"$(print -l "${COCOTERO_LIB:-$HOME/cocotero/library}"/bib/*.bib(:r:t) 2>/dev/null)"})
+        _describe 'key' keys
+      fi
+      ;;
+    open|pdf|rm|cite|read)
       keys=(${(f)"$(print -l "${COCOTERO_LIB:-$HOME/cocotero/library}"/bib/*.bib(:r:t) 2>/dev/null)"})
       _describe 'key' keys
       ;;

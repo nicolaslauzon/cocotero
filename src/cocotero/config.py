@@ -19,6 +19,8 @@ class Config(TypedDict):
     pdf_priority: list[str]
     handoff_mode: str
     libkey_library_id: str
+    drive_remote: str
+    auto_sync: bool
 
 
 DEFAULTS: Config = {
@@ -29,6 +31,8 @@ DEFAULTS: Config = {
     "pdf_priority": ["ieee", "semanticscholar", "unpaywall", "crossref", "arxiv"],
     "handoff_mode": "assisted",
     "libkey_library_id": "",
+    "drive_remote": "",
+    "auto_sync": True,
 }
 
 
@@ -36,10 +40,18 @@ def config_dir() -> Path:
     return Path(os.environ.get("COCOTERO_CONFIG", str(CONFIG_PATH))).parent
 
 
+def _render(value: object) -> str:
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, list):
+        return str(value)
+    return f'"{value}"'
+
+
 def _defaults_toml() -> str:
     lines = ["# Cocotero configuration", "# Created automatically on first run."]
     for key, value in DEFAULTS.items():
-        rendered = str(value) if isinstance(value, list) else f'"{value}"'
+        rendered = _render(value)
         lines.append(f"{key} = {rendered}")
     return "\n".join(lines) + "\n"
 
