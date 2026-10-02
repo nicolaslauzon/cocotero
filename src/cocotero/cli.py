@@ -539,7 +539,9 @@ def _reading_list(args: argparse.Namespace) -> None:
         console.print("Reading list is empty.")
         return
     for item in sorted(items, key=lambda item: item["updated"], reverse=True):
-        console.print(_reading_line(item), markup=False, highlight=False)
+        console.print(
+            _reading_line(item), markup=False, highlight=False, soft_wrap=True
+        )
 
 
 def _reading_current(args: argparse.Namespace) -> None:
@@ -555,7 +557,7 @@ def _reading_current(args: argparse.Namespace) -> None:
         json.dump(record, sys.stdout, indent=2, ensure_ascii=False)
         sys.stdout.write("\n")
         return
-    console.print(_reading_line(entry), markup=False, highlight=False)
+    console.print(_reading_line(entry), markup=False, highlight=False, soft_wrap=True)
     console.print(f"drive: {record['drive'] or 'none'}", markup=False)
     console.print(f"url: {record['url'] or 'none'}", markup=False)
 
@@ -571,7 +573,7 @@ def _reading_update(args: argparse.Namespace) -> None:
         entry = reading.finish(paper, note)
     else:
         entry = reading.drop(paper, note)
-    console.print(_reading_line(entry), markup=False, highlight=False)
+    console.print(_reading_line(entry), markup=False, highlight=False, soft_wrap=True)
 
 
 def cmd_reading(args: argparse.Namespace) -> None:

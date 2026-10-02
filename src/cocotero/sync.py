@@ -105,7 +105,8 @@ def drive_link(paper: Paper) -> str:
 
 
 def _cell(text: str) -> str:
-    return " ".join(text.replace("|", "/").split())
+    cleaned = text.replace("|", "/").replace("{", "").replace("}", "")
+    return " ".join(cleaned.split())
 
 
 def _short_authors(authors: str) -> str:
