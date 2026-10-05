@@ -538,7 +538,7 @@ def _reading_list(args: argparse.Namespace) -> None:
     if not items:
         console.print("Reading list is empty.")
         return
-    for item in sorted(items, key=lambda item: item["updated"], reverse=True):
+    for item in reading.latest_first(items):
         console.print(
             _reading_line(item), markup=False, highlight=False, soft_wrap=True
         )

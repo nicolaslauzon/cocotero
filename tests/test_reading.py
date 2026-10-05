@@ -59,3 +59,13 @@ def test_current_none_when_nothing_in_progress(papers):
     first, _ = papers
     reading.add(first)
     assert reading.current() is None
+
+
+def test_current_compares_across_timezones(papers, monkeypatch):
+    first, second = papers
+    utc, local = "2026-10-05T01:00:00+00:00", "2026-10-04T22:00:00-04:00"
+    stamps = iter([utc, utc, local, local])
+    monkeypatch.setattr(reading, "_now", lambda: next(stamps))
+    reading.set_progress(first, "p2")
+    reading.set_progress(second, "p1")
+    assert reading.current()["key"] == "vaswani2017"

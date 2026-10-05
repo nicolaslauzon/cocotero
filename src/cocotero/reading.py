@@ -89,6 +89,15 @@ def drop(paper: Paper, note: str = "") -> ReadingEntry:
     return _upsert(paper, **changes)
 
 
+def _moment(entry: ReadingEntry) -> datetime:
+    moment = datetime.fromisoformat(entry["updated"])
+    return moment if moment.tzinfo else moment.astimezone()
+
+
+def latest_first(items: list[ReadingEntry]) -> list[ReadingEntry]:
+    return sorted(items, key=_moment, reverse=True)
+
+
 def current() -> ReadingEntry | None:
     reading = [item for item in entries() if item["status"] == "reading"]
-    return max(reading, key=lambda item: item["updated"], default=None)
+    return next(iter(latest_first(reading)), None)
